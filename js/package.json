@@ -1,0 +1,44 @@
+{
+  "name": "@labzero-ai/zero-talk",
+  "version": "1.0.0",
+  "description": "Zero Talk 11M: a small English text-to-speech model that runs on the device, in browsers and Node.js.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "Lab Zero (https://labzero.ai/)",
+  "homepage": "https://labzero.ai/zero-talk-11m/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/labzero-ai/zero-talk.git",
+    "directory": "js"
+  },
+  "bugs": "https://github.com/labzero-ai/zero-talk/issues",
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": ["text-to-speech", "tts", "speech", "webassembly", "webgpu", "zero-talk"],
+  "main": "./dist/zero-talk.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./index.d.ts",
+        "node": "./dist/node.js",
+        "browser": "./dist/zero-talk.js",
+        "default": "./dist/zero-talk.js"
+      },
+      "require": {
+        "types": "./dist/node.d.cts",
+        "default": "./dist/node.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist/", "index.d.ts", "LICENSE", "README.md"],
+  "sideEffects": false,
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

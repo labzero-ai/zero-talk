@@ -1,0 +1,151 @@
+{
+  "id": "labzero-ai/zero-talk-11m",
+  "name": "Zero Talk 11M",
+  "version": "1",
+  "task": "text-to-speech",
+  "summary": "An English text-to-speech model with about 11M parameters. It runs in the browser on the user's own device; nothing typed leaves the device.",
+  "maker": {
+    "name": "Lab Zero",
+    "url": "https://labzero.ai/"
+  },
+  "page": "https://labzero.ai/zero-talk-11m/",
+  "languages": [
+    "en"
+  ],
+  "voices": 1,
+  "parameters": {
+    "approximate": "11M",
+    "detail": "10.8M plus about 94k for the voice"
+  },
+  "audio": {
+    "sample_rate_hz": 24000,
+    "channels": 1,
+    "download_format": "Ogg Opus (the demo's .ogg link)"
+  },
+  "runs_on": {
+    "browser": {
+      "needs": [
+        "WebAssembly",
+        "Web Workers"
+      ],
+      "engines": [
+        "WebGPU, where the browser offers it on a secure page",
+        "WebAssembly, everywhere else"
+      ],
+      "network": "The files are fetched once, when the demo starts; speech is made on the device."
+    }
+  },
+  "tested": [
+    "Chromium on an Apple-silicon laptop, both engines",
+    "Safari 26 on an iPhone 17 Pro, both engines"
+  ],
+  "measurements": [
+    {
+      "what": "speed in the browser",
+      "device": "iPhone 17 Pro, Safari 26",
+      "result": "8.0 s of speech made in about 3.2 s, about 2.5 times faster than real time",
+      "runs": 1,
+      "date": "2026-10-29",
+      "build": "an earlier build of this page"
+    }
+  ],
+  "limitations": [
+    "English only, one voice.",
+    "Questions come out flat; exclamations do not come across.",
+    "Some S sounds have a slight lisp.",
+    "Long sentences can lose their rhythm; sentences that open with a greeting and a comma can sound unnatural.",
+    "Very short utterances can sound slightly cut off at the start.",
+    "No controls for tempo or pauses.",
+    "Accented Latin words are read in plain spelling; other scripts are left out with a warning.",
+    "Some names are read oddly.",
+    "The two browser engines give close but not identical audio."
+  ],
+  "not_available": {
+    "not_in_this_version": [
+      "more than one voice",
+      "control over delivery style and emphasis",
+      "tempo and pause controls",
+      "natural intonation for questions"
+    ],
+    "not_tested": [
+      "Firefox",
+      "Safari on macOS",
+      "Android",
+      "mid-range phones"
+    ],
+    "not_possible_with_this_model": [
+      "languages other than English",
+      "voice cloning"
+    ]
+  },
+  "builds_on": [
+    {
+      "name": "Kokoro-82M",
+      "license": "Apache-2.0",
+      "author": "hexgrad"
+    }
+  ],
+  "license": {
+    "spdx": "Apache-2.0",
+    "text": "https://labzero.ai/zero-talk-11m/LICENSE.txt",
+    "notice": "https://labzero.ai/zero-talk-11m/NOTICE.txt",
+    "third_party_notices": "https://labzero.ai/zero-talk-11m/THIRD-PARTY-NOTICES.txt"
+  },
+  "packages": {
+    "javascript": {
+      "name": "@labzero-ai/zero-talk",
+      "install": "npm install @labzero-ai/zero-talk",
+      "url": "https://www.npmjs.com/package/@labzero-ai/zero-talk"
+    },
+    "python": {
+      "name": "zero-talk",
+      "install": "pip install zero-talk",
+      "url": "https://pypi.org/project/zero-talk/"
+    },
+    "rust": {
+      "name": "zero-talk",
+      "install": "cargo add zero-talk",
+      "url": "https://crates.io/crates/zero-talk"
+    },
+    "weights": "https://huggingface.co/labzero-ai/zero-talk-11m",
+    "source": "https://github.com/labzero-ai/zero-talk"
+  },
+  "files": [
+    {
+      "name": "engine.wasm",
+      "url": "https://labzero.ai/zero-talk-11m/engine.wasm",
+      "bytes": 1006352,
+      "sha256": "bca0ce31a493f8b8ef423fd6ce698517170243dc93ed56c14cfd66107cb1d43e"
+    },
+    {
+      "name": "model.bin",
+      "url": "https://labzero.ai/zero-talk-11m/model.bin",
+      "bytes": 7053248,
+      "sha256": "f0e885226e5fab84d9a800926479e420fc19161a5b4b435eb39d4ee102431ac5"
+    },
+    {
+      "name": "frontend.bin",
+      "url": "https://labzero.ai/zero-talk-11m/frontend.bin",
+      "bytes": 816248,
+      "sha256": "5ade509c060811a5fe9525ac554d6edc2229c2fca66581e093463b9d9b8eaffd"
+    },
+    {
+      "name": "LICENSE.txt",
+      "url": "https://labzero.ai/zero-talk-11m/LICENSE.txt",
+      "bytes": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "name": "NOTICE.txt",
+      "url": "https://labzero.ai/zero-talk-11m/NOTICE.txt",
+      "bytes": 598,
+      "sha256": "8665ac1b7a2ef970f15a20e86a9638f94e43e3aa5cface37b3be1599864a4025"
+    },
+    {
+      "name": "THIRD-PARTY-NOTICES.txt",
+      "url": "https://labzero.ai/zero-talk-11m/THIRD-PARTY-NOTICES.txt",
+      "bytes": 13670,
+      "sha256": "6ae7b943ff9e925372b650172efefeffeacaf59051cd88ba52f394a2c816441b"
+    }
+  ]
+}

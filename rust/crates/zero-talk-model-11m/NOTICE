@@ -1,0 +1,9 @@
+Copyright 2026 Lab Zero
+
+This program and its model are licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The model's weights derive from Kokoro-82M (Apache-2.0), by hexgrad. Lab Zero changed them: the sound generator was factorised, distilled to about a quarter of its parameters, retrained to stream and quantised to 4 bits, and the text-to-acoustics network was trained on Kokoro's outputs.
+
+The text front end ports code and rules from misaki and Kokoro (Apache-2.0) and from spaCy (MIT), with changes: rewritten in Rust.
+
+See THIRD-PARTY-NOTICES.md for all third-party material.

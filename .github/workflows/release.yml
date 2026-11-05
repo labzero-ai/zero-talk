@@ -1,0 +1,256 @@
+# Publishes npm, PyPI and crates.io from a pushed vVERSION tag, with trusted publishing (no registry token is stored).
+# Builds use only this public repository, so the one thing a build adds is the runner's folders: they are remapped,
+# and check-artifacts.py fails the run if any reaches a file. Each publish job waits for approval in the `release`
+# environment (RELEASING.md).
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  version:
+    name: Check release tag and versions
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+      - name: Require a tag matching every package version
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import tomllib
+
+          if os.environ['GITHUB_REF_TYPE'] != 'tag':
+              raise SystemExit('Run this workflow on an existing vVERSION tag, not a branch.')
+          versions = {
+              'rust/Cargo.toml': tomllib.loads(Path('rust/Cargo.toml').read_text())['workspace']['package']['version'],
+              'python/pyproject.toml': tomllib.loads(Path('python/pyproject.toml').read_text())['project']['version'],
+              'python/Cargo.toml': tomllib.loads(Path('python/Cargo.toml').read_text())['package']['version'],
+              'js/package.json': json.loads(Path('js/package.json').read_text())['version'],
+          }
+          if any(os.environ['GITHUB_REF_NAME'] != 'v' + version for version in versions.values()):
+              raise SystemExit('Tag must equal v plus every package version: ' + repr(versions))
+          print('Tag matches all four package versions.')
+          PY
+
+  wheels:
+    name: Wheel (${{ matrix.os }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            manylinux: '2_28'
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            manylinux: '2_28'
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            manylinux: 'off'
+          - os: macos-26
+            target: aarch64-apple-darwin
+            manylinux: 'off'
+          - os: macos-26-intel
+            target: x86_64-apple-darwin
+            manylinux: 'off'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+      - name: Remap native build paths
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          roots = [(os.environ['GITHUB_WORKSPACE'], '/src'), (os.environ.get('CARGO_HOME', str(Path.home() / '.cargo')), '/cargo')]
+          flags = ' '.join('--remap-path-prefix=' + spelling + '=' + target
+                           for source, target in roots for spelling in dict.fromkeys((source, Path(source).as_posix())))
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write('RUSTFLAGS=' + flags + '\n')
+          PY
+      - name: Build the abi3 wheel
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: python
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --out dist
+          # The manylinux container has a different cargo home from its host.
+          before-script-linux: |
+            export RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/src --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+      - name: Install the wheel and test it on its native platform
+        env:
+          ZERO_TALK_MODEL_DIR: ${{ github.workspace }}/rust/crates/zero-talk-model-11m/data
+        run: |
+          python -m pip install python/dist/*.whl
+          python -m unittest discover -s python/tests -v
+      - name: Check the exact wheel before uploading
+        run: |
+          python .github/scripts/check-artifacts.py python/dist/*.whl
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: python-wheel-${{ matrix.os }}
+          path: python/dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: Python source distribution
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: python
+          command: sdist
+          args: --out dist
+      - name: Check the exact sdist before uploading
+        run: |
+          python .github/scripts/check-artifacts.py python/dist/*.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: python-sdist
+          path: python/dist/*.tar.gz
+          if-no-files-found: error
+
+  packages:
+    name: Check Rust and npm packages
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Remap Rust build paths
+        run: echo "RUSTFLAGS=--remap-path-prefix=$GITHUB_WORKSPACE=/src --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo" >> "$GITHUB_ENV"
+      - name: Test and package the Rust workspace
+        working-directory: rust
+        run: |
+          cargo test --release --workspace
+          cargo package --workspace
+      - name: Test and pack npm
+        working-directory: js
+        run: |
+          npm test
+          npm pack --pack-destination "$RUNNER_TEMP"
+      - name: Check packages and the Rust executable
+        run: |
+          python3 .github/scripts/check-artifacts.py rust/target/package/*.crate rust/target/release/zero-talk "$RUNNER_TEMP"/*.tgz
+
+  pypi:
+    name: Publish to PyPI
+    needs: [wheels, sdist, packages]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          pattern: python-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          attestations: true
+
+  npm:
+    name: Publish to npm
+    needs: [wheels, sdist, packages]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install npm with trusted publishing support
+        run: npm install --global npm@11
+      - name: Test and check the exact npm archive
+        working-directory: js
+        run: |
+          npm test
+          npm pack --pack-destination "$RUNNER_TEMP"
+          python3 ../.github/scripts/check-artifacts.py "$RUNNER_TEMP"/*.tgz
+      - name: Publish the checked archive with OIDC and provenance
+        working-directory: js
+        run: npm publish --provenance --access public "$RUNNER_TEMP"/*.tgz
+
+  crates:
+    name: Publish to crates.io
+    needs: [wheels, sdist, packages]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Remap Rust build paths
+        run: echo "RUSTFLAGS=--remap-path-prefix=$GITHUB_WORKSPACE=/src --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo" >> "$GITHUB_ENV"
+      - name: Package and check the crates before authentication
+        run: |
+          cargo package --workspace --manifest-path rust/Cargo.toml
+          python3 .github/scripts/check-artifacts.py rust/target/package/*.crate
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        id: auth
+      - name: Publish the workspace with a temporary OIDC credential
+        working-directory: rust
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --workspace

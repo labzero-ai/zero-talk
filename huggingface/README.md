@@ -1,0 +1,200 @@
+---
+license: apache-2.0
+language:
+  - en
+pipeline_tag: text-to-speech
+base_model: hexgrad/Kokoro-82M
+tags:
+  - on-device
+  - webgpu
+  - webassembly
+  - rust
+  - streaming
+---
+
+# Zero Talk 11M
+
+An English text-to-speech model with about 11M parameters. It runs in your browser, on this device, and nothing you type leaves it.
+
+[Live demo](https://labzero.ai/zero-talk-11m/)
+
+## Use
+
+The files use Lab Zero's own format, read by the `zero-talk` engine. They do not load in PyTorch or `transformers`.
+Use `@labzero-ai/zero-talk` for JavaScript, `zero-talk` for Python, or the `zero-talk` Rust crate instead.
+The Python and Rust packages also install a `zero-talk` command.
+The packages include the model files. The model ID selects those files; it does not download them from Hugging Face.
+These examples use the 1.0.0 package API.
+WAV and Ogg files written by the packages carry an AI-generated marker in their metadata; raw PCM cannot.
+
+### JavaScript
+
+```sh
+npm install @labzero-ai/zero-talk
+```
+
+This package uses ES modules. In Node.js, use a `.mjs` file or set `"type": "module"` in your `package.json`.
+CommonJS code can use `const { loadVoice } = require('@labzero-ai/zero-talk')` inside an async function;
+`loadVoice()` and speech calls still need `await`.
+
+```js
+import { loadVoice } from '@labzero-ai/zero-talk';
+
+const voice = await loadVoice('labzero-ai/zero-talk-11m');
+const audio = await voice.speak('Hello from a small voice.');
+
+audio.samples      // Float32Array, mono
+audio.sampleRate   // 24000
+audio.seconds
+audio.toWav()      // Uint8Array, a WAV file
+await audio.toOgg()  // Uint8Array, Ogg Opus (smaller)
+await audio.play()   // browser only
+```
+
+Play while it is still being made, or take it piece by piece:
+
+```js
+await voice.play('This starts playing before the sentence is finished.');   // browser only
+
+for await (const chunk of voice.stream('A longer text, read piece by piece.')) {
+  chunk.samples;   // Float32Array
+}
+```
+
+### Python
+
+```sh
+pip install zero-talk
+```
+
+```python
+import zero_talk
+
+voice = zero_talk.load_voice("labzero-ai/zero-talk-11m")
+audio = voice.speak("Hello from a small voice.")
+
+audio.save("hello.wav")      # the extension picks the format: .wav or .ogg (Ogg Opus)
+audio.samples                # read-only float32 memoryview, mono; numpy.asarray(audio.samples) needs no copy
+audio.sample_rate            # 24000
+audio.seconds
+```
+
+Piece by piece, while it is still being made:
+
+```python
+import zero_talk
+
+voice = zero_talk.load_voice("labzero-ai/zero-talk-11m")
+for chunk in voice.stream("A longer text, read piece by piece."):
+    chunk.samples
+```
+
+### Rust
+
+```sh
+cargo install zero-talk
+
+zero-talk "Hello there." -o hello.ogg     # Ogg Opus at 24 kbps; a .wav name writes WAV
+zero-talk "Hello there."                  # plays it while it renders (ffplay, paplay or aplay)
+zero-talk --stream "Hello there." > out.ogg
+```
+
+```toml
+[dependencies]
+zero-talk = "1"
+```
+
+```rust
+fn main() -> zero_talk::Result<()> {
+    let voice = zero_talk::Voice::load("labzero-ai/zero-talk-11m")?;
+    let audio = voice.speak("Hello from a small voice.")?;
+
+    audio.save("hello.wav")?;          // the extension picks the format: .wav or .ogg (Ogg Opus)
+    let samples: &[f32] = audio.samples();   // mono, 24 kHz
+
+    for chunk in voice.stream("A longer text, read piece by piece.")? {
+        let chunk = chunk?;
+        let samples: &[f32] = chunk.samples();
+        println!("{} samples", samples.len());
+    }
+    Ok(())
+}
+```
+
+## Files
+
+Sizes and SHA-256 values below are from the release's `model.json`. Licence files keep their published bytes;
+only their names change here. The manifest uses the original `.txt` names and links to the published model page.
+
+| File here | Name in `model.json` | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| [model.bin](model.bin) | `model.bin` | 7053248 | `f0e885226e5fab84d9a800926479e420fc19161a5b4b435eb39d4ee102431ac5` |
+| [frontend.bin](frontend.bin) | `frontend.bin` | 816248 | `5ade509c060811a5fe9525ac554d6edc2229c2fca66581e093463b9d9b8eaffd` |
+| [LICENSE](LICENSE) | `LICENSE.txt` | 11357 | `c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4` |
+| [NOTICE](NOTICE) | `NOTICE.txt` | 598 | `8665ac1b7a2ef970f15a20e86a9638f94e43e3aa5cface37b3be1599864a4025` |
+| [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) | `THIRD-PARTY-NOTICES.txt` | 13670 | `6ae7b943ff9e925372b650172efefeffeacaf59051cd88ba52f394a2c816441b` |
+
+[model.json](model.json) records the release facts and checksums. `README.md` is this card. Neither document has a
+checksum entry in the manifest. The manifest also lists `engine.wasm`, the browser engine; that file ships in the
+JavaScript package and is not included in this model repository.
+
+## Specifications and limits
+
+The specifications below describe the browser demo, as on the [model page](https://labzero.ai/zero-talk-11m/).
+
+| Specification | Value |
+| --- | --- |
+| Parameters | about 11M (10.8M, plus about 94k for the voice) |
+| Voice | English, one voice (Kokoro's af_heart) |
+| Audio | 24 kHz, mono; the demo saves Ogg Opus |
+| Download | about 9 MB, fetched only when you tap |
+| Runs on | this device, in a background thread: WebGPU where the browser offers it on a secure page, otherwise WebAssembly. A GPU is not required. |
+| Tested in | Chromium on an Apple-silicon laptop and Safari 26 on an iPhone 17 Pro, with both engines. Other browsers and phones are untested. |
+| Licence | Apache-2.0, for the model files and the engine ([licence text](LICENSE) · [NOTICE](NOTICE)) |
+| Version | v1 |
+
+On an iPhone 17 Pro, an earlier build of this page made 8.0 s of speech in about 3.2 s, about 2.5 times faster than real time (one run, 2026-10-29).
+
+### Intended use and limits
+
+Made for reading short English texts aloud where size and privacy matter. Not for long narration, other languages, or imitating real people. Short, plain sentences work best. We judged the limits below by listening, in a small number of trials, not with many listeners.
+
+- One voice, English only.
+- Questions come out flat, and exclamations do not come across.
+- Some S sounds have a slight lisp.
+- Long sentences can lose their rhythm.
+- Sentences that open with a greeting and a comma ("Hi, …") can sound unnatural, and very short ones ("Hi.") can sound slightly cut off at the start.
+- Some names are read oddly. Accented Latin words are read in plain spelling; other scripts are left out with a warning.
+- No controls for tempo or pauses.
+- The two browser engines give close but not identical audio.
+
+### What it does not do
+
+Not in this version:
+
+- More than one voice, or control over delivery style and emphasis.
+- Tempo and pause controls.
+- Natural intonation for questions: they come out flat.
+
+Not tested:
+
+- Firefox, Safari on macOS, Android and mid-range phones.
+
+Not possible with this model:
+
+- Other languages: it reads English only.
+- Voice cloning: the voice is fixed and cannot be copied from a recording.
+
+## Licence and credits
+
+Zero Talk, its model files and its engine, is licensed under the Apache License 2.0. Third-party parts keep their own licences, listed in the [notices](THIRD-PARTY-NOTICES).
+
+Zero Talk builds on Kokoro-82M (Apache-2.0), whose author is hexgrad. Its voice is Kokoro's af_heart. Its sound generator started as Kokoro's own, was compressed to about a quarter of its parameters, then retrained to stream. The network that turns text into sound learned from Kokoro as its teacher.
+
+The streaming design, the 4-bit compression, the Rust engine and its WebGPU version are Lab Zero's work. The text rules are ported from misaki (Apache-2.0); the pronunciation dictionary and the small network that guesses unknown words were made by Lab Zero from misaki's dictionaries, with espeak-ng among the tools used (see the [notices](THIRD-PARTY-NOTICES)). The text front end also uses data from spaCy and en_core_web_sm (MIT), LibriSpeech transcripts (CC BY 4.0) and Unicode 15.0.0.
+
+[LICENSE](LICENSE), [NOTICE](NOTICE) and [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) contain the licence text and third-party attributions, copied verbatim from the release files. References to `.txt` names inside the notices retain the original spelling.
+
+## Links
+
+[Lab Zero](https://labzero.ai/) · [GitHub](https://github.com/labzero-ai/zero-talk) · [X](https://x.com/labzeroai)

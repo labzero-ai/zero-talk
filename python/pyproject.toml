@@ -1,0 +1,47 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "zero-talk"
+version = "1.0.0"
+description = "Zero Talk 11M: a small English text-to-speech model, with the model inside the package"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.txt"]
+authors = [{ name = "Lab Zero" }]
+keywords = ["text-to-speech", "tts", "speech", "audio", "ogg"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+[project.scripts]
+zero-talk = "zero_talk._cli:main"
+
+[project.urls]
+Homepage = "https://labzero.ai/zero-talk-11m/"
+Repository = "https://github.com/labzero-ai/zero-talk"
+Issues = "https://github.com/labzero-ai/zero-talk/issues"
+
+[tool.maturin]
+python-source = "python"
+module-name = "zero_talk._native"
+features = ["pyo3/extension-module"]
+
+# The cargo-metadata SBOM would record the absolute folders of the path dependencies (the engine repository), so it is left out.
+[tool.maturin.sbom]
+rust = false

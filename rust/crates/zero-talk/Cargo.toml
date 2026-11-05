@@ -1,0 +1,37 @@
+[package]
+name = "zero-talk"
+description = "Zero Talk 11M: a small English text-to-speech model, its engine and the zero-talk command"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+rust-version.workspace = true
+keywords = ["text-to-speech", "tts", "speech", "audio", "ogg"]
+categories = ["multimedia::audio", "command-line-utilities"]
+include = ["src/**/*.rs", "tests/**/*.rs", "Cargo.toml", "LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.md"]
+
+[lib]
+name = "zero_talk"
+path = "src/lib.rs"
+
+[[bin]]
+name = "zero-talk"
+path = "src/main.rs"
+
+[features]
+default = ["embed"]
+# The model and the text front end are built into the program, so Voice::load needs no files. Without it, give the files to
+# Voice::from_files.
+embed = ["dep:zero-talk-model-11m"]
+# macOS only: Apple's Accelerate framework as a second matrix backend (the command's --backend accelerate). Its results differ
+# slightly from the default backend's.
+accelerate = []
+
+[dependencies]
+# Pure Rust matrix products with runtime-detected AVX2/FMA, AVX-512 and NEON kernels.
+matrixmultiply = "0.3.11"
+# Pure Rust Opus encoder (a port of libopus, BSD-3-Clause).
+opus-pure = "0.2.2"
+zero-talk-model-11m = { version = "1.0.0", path = "../zero-talk-model-11m", optional = true }

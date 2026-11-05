@@ -1,0 +1,36 @@
+[package]
+name = "zero-talk-py"
+description = "The Python extension of Zero Talk 11M: the engine of the zero-talk crate, wrapped for the zero-talk package"
+version = "1.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://labzero.ai/zero-talk-11m/"
+repository = "https://github.com/labzero-ai/zero-talk"
+rust-version = "1.88"
+# Built by maturin (see pyproject.toml); not a crate to publish.
+publish = false
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.30", features = ["abi3-py39"] }
+# Maturin includes the engine and model crates in the sdist with working relative paths. Keep these as paths so an sdist
+# builds without requiring the crates on crates.io. The engine's default `embed` feature compiles in the model.
+zero-talk = { path = "../rust/crates/zero-talk" }
+zero-talk-model-11m = { path = "../rust/crates/zero-talk-model-11m" }
+
+# Cargo reads profiles only from the root package, so the engine repository's release settings are repeated here: the extension is
+# built like the engine's binary, with whole-program LTO and no symbols. Panics unwind (not abort), so PyO3 can raise them as Python
+# exceptions.
+# Stable Cargo does not yet support profile trim-paths. Remap source and dependency paths for release builds:
+#   RUSTFLAGS="--remap-path-prefix=$HOME=/build --remap-path-prefix=$PWD=/src" maturin build --release
+[profile.release]
+strip = "symbols"
+lto = true
+codegen-units = 1
+
+# The Opus encoder is built for size, as in the engine: 331 KB smaller than at opt-level 3, with the same output.
+[profile.release.package.opus-pure]
+opt-level = "s"

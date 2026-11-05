@@ -1,0 +1,17 @@
+[package]
+name = "zero-talk-model-11m"
+description = "The model and text front-end files of Zero Talk 11M, built in as bytes for the zero-talk crate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme = "README.md"
+rust-version.workspace = true
+keywords = ["text-to-speech", "tts", "speech", "model"]
+categories = ["multimedia::audio"]
+include = ["src/**/*.rs", "data/*.bin", "Cargo.toml", "LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.md", "README.md"]
+
+[lib]
+name = "zero_talk_model_11m"
+path = "src/lib.rs"
