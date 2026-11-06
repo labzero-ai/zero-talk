@@ -95,6 +95,24 @@ test('toWav() writes a 16-bit mono 24000 Hz WAV with an AI-generated marker', as
   assert.match(text(chunks.LIST.at, chunks.LIST.size), /^INFOICMT.*AI-generated speech from Zero Talk 11M \(labzero-ai\/zero-talk-11m\)/s);
 });
 
+test('save() writes .wav and .ogg files and names the fix for other names', async () => {
+  const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const folder = await mkdtemp(join(tmpdir(), 'zero-talk-'));
+  try {
+    const audio = await voice.speak(HELLO);
+    await audio.save(join(folder, 'hello.wav'));
+    assert.deepEqual(new Uint8Array(await readFile(join(folder, 'hello.wav'))), audio.toWav());
+    await audio.save(join(folder, 'hello.OGG'));
+    const ogg = await readFile(join(folder, 'hello.OGG'));
+    assert.equal(ogg.subarray(0, 4).toString('latin1'), 'OggS');
+    await assert.rejects(audio.save(join(folder, 'hello.mp3')), /save\(\) writes \.wav \(WAV\) or \.ogg \(Ogg Opus\); name the file with one of those extensions/);
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+});
+
 test('toWav() of "Hello." and of the dates sentence is the website engine\'s WAV, byte for byte', async () => {
   for (const text of [HELLO, DATES]) {
     const audio = await voice.speak(text);

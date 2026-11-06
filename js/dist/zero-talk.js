@@ -22,7 +22,7 @@ export async function loadVoice(id, options = {}) {
   worker.onerror = (event) => channel.fail(new Error(event.message || 'the engine worker stopped'));
   try {
     const loaded = await channel.request({ op: 'load', engine, urls });
-    return createVoice(channel, { loaded, requested: engine, play: playStream });
+    return createVoice(channel, { loaded, requested: engine, play: playStream, save: saveInBrowser });
   } catch (error) {
     worker.terminate();
     const reason = error instanceof Error ? error.message : String(error);
@@ -32,6 +32,11 @@ export async function loadVoice(id, options = {}) {
   } finally {
     if (blobUrl) URL.revokeObjectURL(blobUrl);
   }
+}
+
+// A browser has no file system to write to: the bytes go to the page.
+async function saveInBrowser() {
+  throw new Error('save() writes files in Node.js. In a browser, get the bytes with audio.toWav() or await audio.toOgg() and offer them as a download.');
 }
 
 // The files' addresses: beside this module by default, or in baseUrl (a folder, with or without its trailing slash).

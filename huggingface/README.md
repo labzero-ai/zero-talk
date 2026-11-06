@@ -34,8 +34,17 @@ npm install @labzero-ai/zero-talk
 ```
 
 This package uses ES modules. In Node.js, use a `.mjs` file or set `"type": "module"` in your `package.json`.
-CommonJS code can use `const { loadVoice } = require('@labzero-ai/zero-talk')` inside an async function;
-`loadVoice()` and speech calls still need `await`.
+CommonJS works from a `.cjs` file (or any `.js` file in a project without `"type": "module"`):
+
+```js
+const { loadVoice } = require('@labzero-ai/zero-talk');
+
+(async () => {
+  const voice = await loadVoice('labzero-ai/zero-talk-11m');
+  const audio = await voice.speak('Hello from a small voice.');
+  await audio.save('hello.wav');
+})();
+```
 
 ```js
 import { loadVoice } from '@labzero-ai/zero-talk';
@@ -43,23 +52,33 @@ import { loadVoice } from '@labzero-ai/zero-talk';
 const voice = await loadVoice('labzero-ai/zero-talk-11m');
 const audio = await voice.speak('Hello from a small voice.');
 
+await audio.save('hello.wav');   // Node.js: the extension picks the format, .wav or .ogg (Ogg Opus)
+
 audio.samples      // Float32Array, mono
 audio.sampleRate   // 24000
 audio.seconds
-audio.toWav()      // Uint8Array, a WAV file
-await audio.toOgg()  // Uint8Array, Ogg Opus (smaller)
+audio.toWav()      // Uint8Array, a WAV file (synchronous)
+await audio.toOgg()  // Uint8Array, Ogg Opus (smaller; a promise)
 await audio.play()   // browser only
 ```
+
+In a browser there is no file system: `save()` rejects there. Use `toWav()` or `await audio.toOgg()` and offer the bytes
+as a download.
 
 Play while it is still being made, or take it piece by piece:
 
 ```js
 await voice.play('This starts playing before the sentence is finished.');   // browser only
 
+const parts = [];
 for await (const chunk of voice.stream('A longer text, read piece by piece.')) {
-  chunk.samples;   // Float32Array
+  if (chunk.restart) parts.length = 0;   // the GPU engine failed: the text starts again on WebAssembly
+  else parts.push(chunk.samples);        // Float32Array
 }
 ```
+
+In Node.js the engine is WebAssembly, which makes the whole text first: `stream()` yields one chunk there, and the audio is
+the same as `speak()` returns. In a browser with WebGPU, chunks arrive while the text is still being made.
 
 ### Python
 

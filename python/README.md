@@ -43,7 +43,7 @@ for chunk in voice.stream("A longer text, read piece by piece."):
 | Call | Returns |
 | --- | --- |
 | `zero_talk.load_voice(id, model_dir=None)` | `Voice`. `id` is `"labzero-ai/zero-talk-11m"`, the only voice in this version; `zero_talk.voices()` lists them. `model_dir` reads the files from a folder instead. |
-| `voice.speak(text)` | `Audio`: `samples`, `sample_rate`, `seconds`, `save(path)`, `to_wav()`, `to_ogg()` (bytes) |
+| `voice.speak(text)` | `Audio`: `samples`, `sample_rate`, `seconds`, `warnings`, `save(path)`, `to_wav()`, `to_ogg()` (bytes) |
 | `voice.stream(text)` | iterator of chunks with `samples` |
 
 Text: English, plain sentences; numbers, dates and prices written as digits are read out. Other scripts are skipped with a

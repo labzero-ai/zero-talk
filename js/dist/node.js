@@ -1,7 +1,7 @@
 // Zero Talk 11M in Node.js. The engine runs on the CPU (WebAssembly) in a worker thread. The model files are read from the package folder
 // (or from baseUrl: a folder path, a file: URL or an http(s) URL). Nothing is fetched unless baseUrl is an http(s) URL.
 import { Worker } from 'node:worker_threads';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { Channel, checkLoad, createVoice, VOICE_IDS } from './voice.js';
@@ -32,15 +32,19 @@ export async function loadVoice(id, options = {}) {
   try {
     const transfer = ['engine.wasm', 'model.bin', 'frontend.bin'].map((name) => files[name]);
     const loaded = await channel.request({ op: 'load', engine: 'wasm', files }, { transfer });
-    return createVoice(channel, { loaded, requested: 'wasm', play: playInNode });
+    return createVoice(channel, { loaded, requested: 'wasm', play: playInNode, save: saveInNode });
   } catch (error) {
     await worker.terminate();
     throw new Error(`loadVoice: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
+async function saveInNode(path, bytes) {
+  await writeFile(path, bytes);
+}
+
 async function playInNode() {
-  throw new Error('play() plays through a browser and does not work in Node.js. Write the audio to a file with audio.toWav() or audio.toOgg().');
+  throw new Error('play() plays through a browser and does not work in Node.js. Write the audio to a file with audio.save("hello.wav").');
 }
 
 // The three model files, and files.json (their sizes), read as bytes.

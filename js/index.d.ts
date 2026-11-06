@@ -59,7 +59,12 @@ export interface Audio {
   toWav(): Uint8Array;
   /** The audio as an Ogg Opus file, as bytes. Smaller than WAV. Made by the engine. */
   toOgg(): Promise<Uint8Array>;
-  /** Plays the audio in a browser and resolves when it has ended. In Node.js this rejects: write the file instead. */
+  /**
+   * Writes the audio to a file and resolves when it is written: .wav is a 16-bit mono WAV, .ogg is Ogg Opus. Any other extension rejects
+   * and says so. Node.js only: in a browser this rejects; use toWav() or toOgg() and offer the bytes as a download.
+   */
+  save(path: string): Promise<void>;
+  /** Plays the audio in a browser and resolves when it has ended. In Node.js this rejects: write the file with save() instead. */
   play(): Promise<void>;
 }
 

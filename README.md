@@ -1,7 +1,9 @@
 # Zero Talk
 
 Zero Talk 11M is an English text-to-speech model with about 11M parameters that runs on the user's device. The model ships
-inside each package: no server, no API key, no network access at runtime.
+inside each package: no server and no API key. Python, Rust and Node.js make speech on the machine without network access
+(Node.js reads the model from the installed package); a browser downloads the model files from wherever the package is served
+when the voice first loads.
 
 | Folder | Package | For |
 | --- | --- | --- |

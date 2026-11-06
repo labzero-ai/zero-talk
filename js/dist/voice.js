@@ -127,7 +127,8 @@ function floatsOf(bytes) {
   return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
 }
 
-// A speech result. `play` is the entry's player (browser) or a function that rejects (Node.js).
+// A speech result. `play` is the entry's player (browser) or a function that rejects (Node.js); `save` writes bytes to a file
+// (Node.js) or rejects with the way to download them (browser).
 class SpeechAudio {
   samples;
   sampleRate = SAMPLE_RATE;
@@ -135,13 +136,15 @@ class SpeechAudio {
   warnings;
   #channel;
   #play;
+  #save;
 
-  constructor(samples, { warnings, channel, play }) {
+  constructor(samples, { warnings, channel, play, save }) {
     this.samples = samples;
     this.seconds = samples.length / SAMPLE_RATE;
     this.warnings = warnings;
     this.#channel = channel;
     this.#play = play;
+    this.#save = save;
   }
 
   toWav() {
@@ -157,6 +160,14 @@ class SpeechAudio {
   async play() {
     await this.#play([{ samples: this.samples }]);
   }
+
+  // Writes a .wav (WAV) or .ogg (Ogg Opus) file, as Python's and Rust's save() do. Node.js only.
+  async save(path) {
+    const name = String(path);
+    const kind = /\.(wav|ogg)$/i.exec(name)?.[1].toLowerCase();
+    if (!kind) throw new Error(`${name}: save() writes .wav (WAV) or .ogg (Ogg Opus); name the file with one of those extensions`);
+    await this.#save(name, kind === 'wav' ? this.toWav() : await this.toOgg());
+  }
 }
 
 // A loaded voice: speak, stream and play. Each call is one request to the engine worker, answered in the order it was made.
@@ -165,17 +176,19 @@ class SpeechVoice {
   #channel;
   #requested;
   #play;
+  #save;
 
-  constructor(channel, { engine, requested, play }) {
+  constructor(channel, { engine, requested, play, save }) {
     this.engine = engine;
     this.#channel = channel;
     this.#requested = requested;
     this.#play = play;
+    this.#save = save;
   }
 
   async speak(text) {
     const reply = await this.#channel.request({ op: 'speak', text: checkText(text), format: FORMAT_FLOAT32, engine: this.#requested });
-    return new SpeechAudio(floatsOf(reply.out), { warnings: warningsOf(reply.info), channel: this.#channel, play: this.#play });
+    return new SpeechAudio(floatsOf(reply.out), { warnings: warningsOf(reply.info), channel: this.#channel, play: this.#play, save: this.#save });
   }
 
   // Yields the audio as the engine makes it. On WebAssembly the whole text comes as one chunk. If the GPU engine fails part-way, a
@@ -234,6 +247,6 @@ function checkText(text) {
 }
 
 // The voice an entry returns from loadVoice. `loaded` is the worker's reply to the load request.
-export function createVoice(channel, { loaded, requested, play }) {
-  return new SpeechVoice(channel, { engine: loaded.engine, requested, play });
+export function createVoice(channel, { loaded, requested, play, save }) {
+  return new SpeechVoice(channel, { engine: loaded.engine, requested, play, save });
 }

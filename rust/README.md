@@ -69,6 +69,15 @@ the data in its own crate means an engine update does not re-publish the model. 
 zero-talk = { version = "1", default-features = false }
 ```
 
+Without `embed`, `Voice::load` returns an error that says so; give the two files yourself:
+
+```rust
+let voice = zero_talk::Voice::from_files("model.bin", "frontend.bin")?;
+```
+
+`model.bin` and `frontend.bin` are the files in the `data/` folder of the `zero-talk-model-11m` crate, and in the Hugging Face
+repository `labzero-ai/zero-talk-11m`.
+
 ## What it does and does not do
 
 English only, one voice, 24 kHz mono. Questions come out flat, and long sentences can lose their rhythm; short, plain
