@@ -7,7 +7,7 @@ use super::network::G2pNet;
 use super::pyutil::{is_letter, lstrip, strip};
 use super::tables::Tables;
 use super::tagger::Tagger;
-use super::tokenizer::Tokenizer;
+use super::tokenizer::{st_readings, Tokenizer};
 use crate::archive::{Archive, Result};
 
 /// One sentence (or part of a long one) to speak: its phonemes, at most 510, and the voice-table row of that length.
@@ -65,7 +65,7 @@ impl Frontend {
 
     /// The analysis of one segment: spaCy-style tokens and tags from the tokenizer and the tagger.
     pub fn analyze(&self, text: &str) -> Spacy {
-        let toks = self.tokenizer.tokenize(text);
+        let toks = st_readings(self.tokenizer.tokenize(text));
         let sentence_upper = text.to_uppercase() == text && text.chars().any(super::pyutil::is_letter);
         let tags = self.tagger.tag(&toks, sentence_upper);
         toks.into_iter().zip(tags).map(|((t, w), g)| (t, g, w)).collect()
@@ -104,7 +104,8 @@ impl Frontend {
         let lex = self.lexicon();
         let mut plan = Plan { chunks: Vec::new(), unread: Vec::new() };
         for segment in strip(text).split('\n').filter(|s| !strip(s).is_empty()) {
-            let tokens = self.segment_tokens(&lex, segment, analyze);
+            let normalized = super::normalize::normalize(segment);
+            let tokens = self.segment_tokens(&lex, &normalized, analyze);
             for t in &tokens {
                 if t.text.chars().any(is_letter) && t.phonemes.as_deref().is_none_or(str::is_empty) && !plan.unread.contains(&t.text) {
                     plan.unread.push(t.text.clone());

@@ -140,6 +140,16 @@ fn main() -> zero_talk::Result<()> {
 }
 ```
 
+### Errors and limits
+
+Measured on 2026-11-06 with the three packages. Exact error texts are in each package's README.
+
+- Empty text, text with only spaces or punctuation (`...`), an emoji, or text with no letter the model can read: an error, `nothing to say: the text has no words the model can read; pass a sentence made of letters, for example "Hello."`. A lone `.`, `?` or `!` speaks as 0.29 s of audio.
+- Letters outside a to z (Cyrillic, Greek, Chinese) are left out and named in the warnings. Most symbols and emoji are left out with no warning (some, such as `&` and `%`, are read as "and" and "percent"), and so are whole numbers of more than 306 digits.
+- Length: a text of 5,016 characters, a text of 50,000 characters (3,049 s of speech) and one sentence of 11,263 characters with no full stop all speak in full. Speech is made in pieces of at most 510 phonemes.
+- An unknown voice ID, an unknown engine (JavaScript) or a file name without `.wav` or `.ogg` is an error that names the valid choices.
+- Streaming: JavaScript in Node.js yields the whole text as one chunk; Python and Rust yield a chunk for each piece as it is made.
+
 ## Files
 
 Sizes and SHA-256 values below are from the release's `model.json`. Licence files keep their published bytes;

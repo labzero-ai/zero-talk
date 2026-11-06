@@ -74,6 +74,31 @@ sentences work best. The full list is on the model page.
 Wheels for Python 3.9 and later on macOS (Apple silicon), Linux (x86-64 and ARM, manylinux) and Windows (x86-64); the
 tests pass on each.
 
+## Errors and limits
+
+Measured on 2026-11-06 with Python 3.12 and this package. Quoted texts are exact.
+
+| Case | What happens |
+| --- | --- |
+| Empty text, spaces only, `...`, an emoji, or text with no letter the model can read (Chinese, for example) | `speak()` raises `ValueError: nothing to say: the text has no words the model can read; pass a sentence made of letters, for example "Hello."`. `stream()` raises the same error at the call, before the first chunk. |
+| A lone `.`, `?` or `!` | Speaks as 0.29 s of audio, with no warning. |
+| Letters outside a to z (Cyrillic, Greek, Chinese) in text that has other words | Left out, and named in `audio.warnings`, for example `["1 word(s) could not be read and are left out: мир"]`. Text whose only readable parts are punctuation (`Привет, мир.`) speaks 0.46 s with that warning; `Привет мир` with no punctuation raises the error above. |
+| Most symbols and emoji (`#`, `~`, `/`, `😀`) | Left out with no warning. Some symbols are read as words: `&` as "and", `%` as "percent", `+` as "plus", `=` as "equals", `@` as "at", `©` as "copyright". |
+| A whole number of more than 306 digits | Left out with no warning; a 307-digit number leaves only its full stop. |
+| Length | A text of 5,016 characters (96 sentences) speaks in full: 306 s of speech in 96 s. A text of 50,000 characters (8,908 words) also speaks in full: 3,049 s of speech in 972 s, peak memory about 966 MB. One sentence of 11,263 characters with no full stop speaks in full (644 s of speech). The text is split into pieces of at most 510 phonemes; a longer sentence is split too, with no warning. |
+| Unknown voice ID | `ValueError: no voice named 'labzero-ai/unknown'; the voices are: labzero-ai/zero-talk-11m. zero_talk.voices() lists them.` |
+| `model_dir` without the model files | `FileNotFoundError: <folder>/model.bin: no such file; model_dir must hold model.bin and frontend.bin (zero_talk.model_info() gives their sizes and hashes)` |
+| `model_dir` with a file of another kind | `ValueError: <folder>/model.bin: this is a 'frontend' file, not a model file` |
+| `save()` with another extension (`.mp3`, none) | `ValueError: <path>: save() writes .wav (WAV) or .ogg (Ogg Opus); name the file with one of those extensions`. Nothing is written. `.WAV` in capitals works. |
+| `save()` into a missing folder | `FileNotFoundError: No such file or directory (os error 2)`. This message does not name the file. |
+| Text that is not a string | `TypeError: 'int' object is not an instance of 'str'` |
+
+Streaming: `stream()` yields a chunk for each piece as it is made; for a three-sentence text that is 11 chunks, the first of
+55 samples (about 2 ms), and the chunks joined equal the samples of `speak()`.
+
+A voice can be used from several threads. Calls are made one at a time, and the audio is the same as when they run one after
+another. A `Stream` must be used in the thread that made it; another thread gets a `PanicException`.
+
 ## Licence
 
 Apache-2.0, for the code and the model files. Zero Talk builds on Kokoro-82M (Apache-2.0). Third-party notices are in

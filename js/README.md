@@ -123,9 +123,37 @@ sentences work best. The full list, with what is not possible, is on the model p
 
 WAV and Ogg files from `toWav()` and `toOgg()` carry an AI-generated marker in their metadata; the samples are unchanged.
 
+The audio from Node.js (WebAssembly) differs from the Python and Rust packages' audio by floating-point rounding: the same speech, not the same bytes.
+
 Tested in Chromium on an Apple-silicon laptop and in Safari on an iPhone 17 Pro. In Node.js (22 and 24 on Linux and
 Windows, and on macOS) it writes byte-for-byte the same audio as the website's engine. Other browsers and phones are
 untested.
+
+## Errors and limits
+
+Measured on 2026-11-06 with Node.js 26.12.1 (the WebAssembly engine). A failed call rejects with an `Error` whose message
+is shown; quoted texts are exact.
+
+| Case | What happens |
+| --- | --- |
+| Empty text, spaces only, `...`, an emoji, or text with no letter the model can read (Chinese, for example) | `speak()` and `stream()` reject with `nothing to say: the text has no words the model can read; pass a sentence made of letters, for example "Hello."` |
+| A lone `.`, `?` or `!` | Speaks as 0.29 s of audio, with no warning. |
+| Letters outside a to z (Cyrillic, Greek, Chinese) in text that has other words | Left out, and named in `audio.warnings`, for example `["1 word(s) could not be read and are left out: мир"]`. Text whose only readable parts are punctuation (`Привет, мир.`) speaks 0.46 s with that warning; `Привет мир` with no punctuation rejects as above. |
+| Most symbols and emoji (`#`, `~`, `/`, `😀`) | Left out with no warning. Some symbols are read as words: `&` as "and", `%` as "percent", `+` as "plus", `=` as "equals", `@` as "at", `©` as "copyright". |
+| A whole number of more than 306 digits | Left out with no warning; a 307-digit number leaves only its full stop. |
+| Length | A text of 5,016 characters (96 sentences) speaks in full: 306 s of speech, made in 164 s. A text of 50,000 characters (8,908 words) also speaks in full: 3,049 s of speech, made in 1,609 s, peak memory about 1.18 GB. A sentence of 2,815 characters with no full stop speaks in full: 161 s of speech, made in 91 s. The text is split into pieces of at most 510 phonemes; a longer sentence is split too, with no warning. |
+| Unknown voice ID | `Unknown voice 'labzero-ai/unknown'. The valid ids are: labzero-ai/zero-talk-11m.` |
+| Unknown `engine` | `engine must be 'auto', 'gpu' or 'wasm', not 'cpu'.` With `engine: 'gpu'` in Node.js: `loadVoice: engine 'gpu' needs WebGPU, which only browsers have. Use engine 'auto' or 'wasm' in Node.js.` |
+| `baseUrl` folder without the files | Node.js's own error, for example `ENOENT: no such file or directory, open '<folder>/engine.wasm'`. |
+| Text that is not a string | `TypeError: text must be a string, not number.` |
+| `save()` with another extension (`.mp3`, none) | `<path>: save() writes .wav (WAV) or .ogg (Ogg Opus); name the file with one of those extensions`. Nothing is written. `.WAV` in capitals works. |
+| `save()` into a missing folder | Node.js's own error: `ENOENT: no such file or directory, open '<path>'`. |
+| `play()` in Node.js | `play() plays through a browser and does not work in Node.js. Write the audio to a file with audio.save("hello.wav").` |
+
+Streaming: in Node.js `stream()` yields one chunk, the whole text, made before the chunk is returned; for a three-sentence
+text that is 1 chunk of 90,900 samples, the same as `speak()`.
+
+Calls can overlap: several `speak()` calls at once give the same audio as one after another.
 
 ## Licence
 

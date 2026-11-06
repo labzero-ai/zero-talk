@@ -6,6 +6,7 @@ pub mod fold;
 pub mod frontend;
 pub mod g2p;
 pub mod lexicon;
+pub mod normalize;
 pub mod network;
 pub mod num2words;
 pub mod pyutil;

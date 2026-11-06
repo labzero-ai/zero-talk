@@ -153,7 +153,7 @@ impl Voice {
             warnings.push(format!("{} character(s) have no sound in the model and are left out: {}", unique.len(), shown.join(" ")));
         }
         if sentences.is_empty() {
-            return Err(Error::new("nothing to say: no phonemes came out of the text"));
+            return Err(Error::new("nothing to say: the text has no words the model can read; pass a sentence made of letters, for example \"Hello.\""));
         }
         Ok((sentences, warnings))
     }

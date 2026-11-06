@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use pyo3::exceptions::{PyFileNotFoundError, PyValueError};
+use pyo3::exceptions::{PyFileNotFoundError, PyValueError, PyOSError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyMemoryView};
 
@@ -198,7 +198,7 @@ impl PyAudio {
             }
         }
         .map_err(engine_error)?;
-        std::fs::write(&path, bytes)?;
+        std::fs::write(&path, bytes).map_err(|e| PyOSError::new_err(format!("{}: {}", path.display(), e)))?;
         Ok(())
     }
 

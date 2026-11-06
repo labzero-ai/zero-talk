@@ -20,7 +20,7 @@
   "audio": {
     "sample_rate_hz": 24000,
     "channels": 1,
-    "download_format": "Ogg Opus (the demo's .ogg link)"
+    "output_format": "WAV or Ogg Opus (the demo's download is .ogg)"
   },
   "runs_on": {
     "browser": {
@@ -37,7 +37,8 @@
   },
   "tested": [
     "Chromium on an Apple-silicon laptop, both engines",
-    "Safari 26 on an iPhone 17 Pro, both engines"
+    "Safari 26 on an iPhone 17 Pro, both engines",
+    "Packages, in continuous integration: Linux (x86-64 and ARM), Windows (x86-64) and macOS (Apple silicon); Python 3.9 and 3.13; Node.js 22 and 24"
   ],
   "measurements": [
     {
@@ -114,8 +115,8 @@
     {
       "name": "engine.wasm",
       "url": "https://labzero.ai/zero-talk-11m/engine.wasm",
-      "bytes": 1006352,
-      "sha256": "bca0ce31a493f8b8ef423fd6ce698517170243dc93ed56c14cfd66107cb1d43e"
+      "bytes": 1100564,
+      "sha256": "6dacc05f64d5674a8af9f756cdda737c5f1123687c59671559640b851c92d722"
     },
     {
       "name": "model.bin",

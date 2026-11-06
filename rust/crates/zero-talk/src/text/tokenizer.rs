@@ -446,3 +446,154 @@ impl Tokenizer {
         self.apply_special_cases(toks)
     }
 }
+
+/// Words that make "St." or "St" after a street name a street: suffixes, directions and unit designators (lower case, without
+/// a full stop).
+const STREET_FOLLOWERS: &[&str] = &[
+    "ave", "avenue", "blvd", "boulevard", "rd", "road", "ln", "lane", "ct", "court", "pl", "place", "way", "pkwy", "parkway", "hwy",
+    "highway", "ter", "terrace", "cir", "circle", "sq", "square", "trl", "trail", "plz", "plaza", "n", "s", "e", "w", "ne", "nw", "se",
+    "sw", "north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest", "apt", "ste", "suite", "unit",
+];
+
+/// The reading of a "St." or "St" token: a street, a saint, or the tokenizer's own reading.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StReading {
+    Street,
+    Saint,
+    Other,
+}
+
+fn starts_upper(t: &str) -> bool {
+    t.chars().next().is_some_and(|c| c.is_uppercase() && is_letter(c))
+}
+
+fn is_lower_word(t: &str) -> bool {
+    t.chars().next().is_some_and(char::is_lowercase) && t.chars().all(is_letter)
+}
+
+/// A number as written: digits and commas, with an optional ordinal ending ("42", "1,200", "5th").
+fn is_number(t: &str) -> bool {
+    let digits = ["st", "nd", "rd", "th"].iter().find_map(|s| t.strip_suffix(*s)).unwrap_or(t);
+    digits.starts_with(|c: char| c.is_ascii_digit()) && digits.chars().all(|c| c.is_ascii_digit() || c == ',')
+}
+
+/// The reading of the "St." or "St" token at `i`, from the tokens before and after it. After a street name (a capitalised word, a
+/// number, or a lower-case word after a number) it is a street, unless a capitalised word follows that is not a street follower;
+/// before a capitalised word it is a saint; otherwise it is `Other`.
+pub fn st_reading(toks: &[(String, String)], i: usize) -> StReading {
+    let prev = i.checked_sub(1).map(|j| toks[j].0.as_str());
+    let before_prev = i.checked_sub(2).map(|j| toks[j].0.as_str());
+    let next = toks.get(i + 1).map(|t| t.0.as_str());
+    let street_name = prev.is_some_and(|p| starts_upper(p) || is_number(p) || (is_lower_word(p) && before_prev.is_some_and(is_number)));
+    let capital_next = next.is_some_and(starts_upper);
+    let follower = next.is_some_and(|n| STREET_FOLLOWERS.contains(&n.trim_end_matches('.').to_lowercase().as_str()));
+    if street_name && (!capital_next || follower) {
+        StReading::Street
+    } else if capital_next {
+        StReading::Saint
+    } else {
+        StReading::Other
+    }
+}
+
+/// The tokens with each "St." or "St" read as "Street" or "Saint" where its neighbours say so, before the tagger and the lexicon see
+/// them. A street keeps the full stop only at the end of the text, where it ends the sentence.
+pub fn st_readings(toks: Vec<(String, String)>) -> Vec<(String, String)> {
+    let n = toks.len();
+    let mut out = Vec::with_capacity(n + 1);
+    for i in 0..n {
+        let (text, ws) = (toks[i].0.as_str(), toks[i].1.as_str());
+        if text != "St." && text != "St" {
+            out.push(toks[i].clone());
+            continue;
+        }
+        match st_reading(&toks, i) {
+            StReading::Street if text == "St." && i + 1 == n => {
+                out.push(("Street".to_string(), String::new()));
+                out.push((".".to_string(), ws.to_string()));
+            }
+            StReading::Street => out.push(("Street".to_string(), ws.to_string())),
+            StReading::Saint => out.push(("Saint".to_string(), ws.to_string())),
+            StReading::Other => out.push(toks[i].clone()),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{st_reading, st_readings, StReading};
+
+    /// Words separated by single spaces as tokens: each token is followed by a space except the last.
+    fn toks(s: &str) -> Vec<(String, String)> {
+        let words: Vec<&str> = s.split(' ').collect();
+        words.iter().enumerate().map(|(i, w)| (w.to_string(), String::from(if i + 1 < words.len() { " " } else { "" }))).collect()
+    }
+
+    /// The token texts after the readings of "St." and "St".
+    fn read(s: &str) -> Vec<String> {
+        st_readings(toks(s)).into_iter().map(|t| t.0).collect()
+    }
+
+    #[test]
+    fn street_after_a_capitalised_name_and_before_a_lower_case_word() {
+        assert_eq!(read("He lives on Main St. near the park"), ["He", "lives", "on", "Main", "Street", "near", "the", "park"]);
+        assert_eq!(read("Fifth St. and Elm Ave. meet here"), ["Fifth", "Street", "and", "Elm", "Ave.", "meet", "here"]);
+        assert_eq!(read("Oak St and Pine St are near each other"), ["Oak", "Street", "and", "Pine", "Street", "are", "near", "each", "other"]);
+        assert_eq!(st_reading(&toks("Oak St. and"), 1), StReading::Street);
+    }
+
+    #[test]
+    fn the_sentence_with_an_address() {
+        assert_eq!(
+            read("Dr. Smith lives at 42 Oak St. and works for the U.S. Department of Energy ."),
+            ["Dr.", "Smith", "lives", "at", "42", "Oak", "Street", "and", "works", "for", "the", "U.S.", "Department", "of", "Energy", "."]
+        );
+    }
+
+    #[test]
+    fn street_at_the_end_of_the_text_keeps_the_full_stop() {
+        assert_eq!(read("Turn left on Pine St."), ["Turn", "left", "on", "Pine", "Street", "."]);
+        let t = st_readings(toks("Oak St. and Pine St."));
+        assert_eq!(t[1], ("Street".to_string(), " ".to_string()));
+        assert_eq!(t[4], ("Street".to_string(), String::new()));
+        assert_eq!(t[5], (".".to_string(), String::new()));
+    }
+
+    #[test]
+    fn street_before_a_comma() {
+        assert_eq!(read("Oak St , Boston"), ["Oak", "Street", ",", "Boston"]);
+        assert_eq!(read("Ash St , Newtown is near"), ["Ash", "Street", ",", "Newtown", "is", "near"]);
+    }
+
+    #[test]
+    fn street_after_a_number_or_a_number_and_a_word() {
+        assert_eq!(read("Walk down 42 St. and turn left"), ["Walk", "down", "42", "Street", "and", "turn", "left"]);
+        assert_eq!(read("Walk along 42 oak St. and wait"), ["Walk", "along", "42", "oak", "Street", "and", "wait"]);
+        assert_eq!(read("Ring the bell at 5th St. when you arrive"), ["Ring", "the", "bell", "at", "5th", "Street", "when", "you", "arrive"]);
+    }
+
+    #[test]
+    fn street_before_a_direction_or_a_unit() {
+        assert_eq!(read("Please meet me at Main St. North of the river"), ["Please", "meet", "me", "at", "Main", "Street", "North", "of", "the", "river"]);
+        assert_eq!(read("Our office is at Elm St. Suite 200 downtown"), ["Our", "office", "is", "at", "Elm", "Street", "Suite", "200", "downtown"]);
+    }
+
+    #[test]
+    fn saint_before_a_capitalised_word() {
+        assert_eq!(read("We visited St. Patrick's Day parade in March"), ["We", "visited", "Saint", "Patrick's", "Day", "parade", "in", "March"]);
+        assert_eq!(read("St. Mary's Day is in May"), ["Saint", "Mary's", "Day", "is", "in", "May"]);
+        assert_eq!(read("He liked St Mary's school"), ["He", "liked", "Saint", "Mary's", "school"]);
+        assert_eq!(read("Visit St. Mary today"), ["Visit", "Saint", "Mary", "today"]);
+        assert_eq!(read("Elm St. Mary is rare"), ["Elm", "Saint", "Mary", "is", "rare"]);
+    }
+
+    #[test]
+    fn other_readings_are_left_to_the_tokenizer() {
+        assert_eq!(read("We walk past St. and then go home"), ["We", "walk", "past", "St.", "and", "then", "go", "home"]);
+        assert_eq!(read("Yesterday , St. was quiet"), ["Yesterday", ",", "St.", "was", "quiet"]);
+        assert_eq!(read("St. and Oak are both on the list"), ["St.", "and", "Oak", "are", "both", "on", "the", "list"]);
+        assert_eq!(read("the church of st. mary"), ["the", "church", "of", "st.", "mary"]);
+        assert_eq!(read("Stop at the first stone"), ["Stop", "at", "the", "first", "stone"]);
+    }
+}
