@@ -31,7 +31,8 @@ function f16ToF32(h) {
 
 /**
  * Parses a model file (Uint8Array or ArrayBuffer), checking magic, version and CRC-32 (not the CRC with verify false). Returns a reader with
- * meta (string -> string), names, has(name), shape(name), f32(name) (float32 in PyTorch's shape and row-major layout)
+ * meta (string -> string), names, has(name), shape(name), f32(name) (float32 in PyTorch's shape and row-major layout),
+ * packed(name) (a block-quantized tensor kept packed, laid out for the GPU to dequantize; null for the other codes)
  * and part(prefix): the same reader over the tensors named `prefix.<name>`, addressed without the prefix.
  */
 export function parseTensors(bytes, { verify = true } = {}) {
@@ -155,12 +156,46 @@ export function parseTensors(bytes, { verify = true } = {}) {
     return w;
   };
 
+  // A BLOCK tensor kept packed, laid out for the GPU to dequantize: { bits, block, transposed, shape, rows, len, words, data }. The weight at
+  // (row, col) of the file's [rows][len] matrix is code * scale, the product rounded once to float32 (the value expand() gives, in the same
+  // order of rows and columns). data is one Uint32Array: the first `words` hold the codes, column-major (the code of (row, col) is number
+  // col * rows + row, low bits first, so the codes of consecutive rows are adjacent), padded to a whole word; then the float32 scales
+  // [col / block][row] (the file's float16 values, converted exactly). With `taps` the columns of each group of `taps` are reversed in the
+  // code order only (the transposed convolutions' taps; scales stay with the file's column).
+  const packed = (name, { taps = 0 } = {}) => {
+    const { code, shape, offset, bits, block, transposed } = entry(name);
+    if (code !== BLOCK) return null;
+    const n = shape.reduce((a, b) => a * b, 1);
+    const rows = transposed ? shape[1] : shape[0];
+    const len = n / rows;
+    const nb = Math.ceil(len / block);
+    const codeBytes = Math.ceil((n * bits) / 8);
+    const words = Math.ceil(codeBytes / 4);
+    const data = new Uint32Array(words + rows * nb);
+    const dst = new Uint8Array(data.buffer, 0, 4 * words);
+    const src = u8.subarray(offset, offset + codeBytes);
+    const mask = (1 << bits) - 1;
+    for (let col = 0; col < len; col++) {
+      const g = taps ? col - (col % taps) + taps - 1 - (col % taps) : col;
+      for (let row = 0; row < rows; row++) {
+        const i = row * len + col, j = g * rows + row;
+        if (bits === 8) dst[j] = src[i];
+        else dst[j >> 1] |= ((src[i >> 1] >> (4 * (i & 1))) & mask) << (4 * (j & 1));
+      }
+    }
+    const f32 = new Float32Array(data.buffer, 4 * words, rows * nb);
+    const rd = new DataView(u8.buffer, u8.byteOffset + offset + codeBytes, 2 * rows * nb);
+    for (let row = 0; row < rows; row++) for (let k = 0; k < nb; k++) f32[k * rows + row] = f16ToF32(rd.getUint16(2 * (row * nb + k), true));
+    return { bits, block, transposed, shape: shape.slice(), rows, len, words, data };
+  };
+
   const reader = (p) => ({ // p is '' or 'prefix.'
     meta,
     names: names.filter((n) => n.startsWith(p)).map((n) => n.slice(p.length)),
     has: (name) => entries.has(p + name),
     shape: (name) => entry(p + name).shape.slice(),
     f32: (name) => expand(p + name),
+    packed: (name, options) => packed(p + name, options),
     part: (prefix) => reader(`${p}${prefix}.`),
   });
   return reader('');

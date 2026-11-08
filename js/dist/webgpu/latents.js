@@ -176,7 +176,6 @@ export class GpuAcoustic {
     const rec = KN.RECURRENCE, prep = KN.PREPARE;
     this.k = {
       conv: this.kern(convWGSL({ k: 1, dil: 1, pad: 0, bias: true }, TILE), 'linear'),
-      convRes: this.kern(convWGSL({ k: 1, dil: 1, pad: 0, bias: true, residual: true }, TILE), 'linear + residual'),
       cond: this.kern(KN.CONDITION, 'condition'), dw: this.kern(KN.DEPTHWISE, 'depthwise'), ln: this.kern(KN.LAYERNORM, 'layer norm'),
       gelu: this.kern(KN.GELU, 'gelu'), scan: this.kern(KN.SCAN, 'energy scan'), scale: this.kern(KN.SCALE, 'response scale'),
       resp: this.kern(KN.RESPONSE, 'response'), tr: this.kern(KN.TRANSPOSE, 'transpose'), rec: this.kern(rec, 'delta rule'),
@@ -215,14 +214,22 @@ export class GpuAcoustic {
     return b;
   }
 
-  // The student's tensors: every Linear packed for convWGSL; the residual variant for the Linears whose output adds the stream.
+  // The student's tensors: every Linear for convWGSL, as the model file stores it (block-quantized) or packed as floats; the residual variant for
+  // the Linears whose output adds the stream.
   loadWeights() {
     const P = this.part, up = (name) => this.upload(P.f32(name));
     const lin = (name, cout, cin, residual = false) => {
       const s = P.shape(`${name}.weight`);
       if (s[0] !== cout || s[1] !== cin) throw new Error(`${name}: shape [${s}], expected [${cout}, ${cin}]`);
-      return { kern: residual ? this.k.convRes : this.k.conv, w: this.upload(packLinear(P.f32(`${name}.weight`), cout, cin)),
-        bias: up(`${name}.bias`), cin, cout };
+      const pk = cout % 4 === 0 && cin % 8 === 0 ? P.packed(`${name}.weight`) : null;
+      if (!pk) return { kern: residual ? this.kern(convWGSL({ k: 1, dil: 1, pad: 0, bias: true, residual }, TILE), 'linear + residual') : this.k.conv,
+        w: this.upload(packLinear(P.f32(`${name}.weight`), cout, cin)), bias: up(`${name}.bias`), cin, cout };
+      // Block-quantized in the model file: kept packed, the shader dequantizes the tile it loads (see convWGSL).
+      if (pk.rows !== cout || pk.len !== cin || pk.words !== Math.ceil(Math.ceil((cout * cin * pk.bits) / 8) / 4)) {
+        throw new Error(`${name}: packed shape [${pk.shape}], expected [${cout}, ${cin}]`);
+      }
+      return { kern: this.kern(convWGSL({ k: 1, dil: 1, pad: 0, bias: true, residual, packed: { bits: pk.bits, block: pk.block } }, TILE),
+        residual ? 'linear + residual' : 'linear'), w: this.upload(pk.data), bias: up(`${name}.bias`), cin, cout };
     };
     // A ConvNeXt block under the prefix p: the acoustic blocks, the text encoder's and the frame block.
     const block = (p) => ({ dw: up(`${p}.depthwise.weight`), dwB: up(`${p}.depthwise.bias`), lnW: up(`${p}.norm.weight`), lnB: up(`${p}.norm.bias`),

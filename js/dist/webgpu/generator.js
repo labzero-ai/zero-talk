@@ -79,7 +79,7 @@ export class GpuGenerator {
       device, maxFrames, part: model.part('generator'), keep: [], plans: new Map(), kerns: new Map(), sites: new Map(),
       blocks: new Map(), hasAffines: false, tickets: [], seq: 0, arenaBufs: [],
     });
-    const T = (n) => this.part.f32(n), S = (n) => this.part.shape(n);
+    const T = (n) => this.part.f32(n), S = (n) => this.part.shape(n), Wt = (n, cout, cin, k) => this.weights(n, cout, cin, k);
     // Kernels that are not per layer.
     this.elem = {
       add: this.kern(elementwiseWGSL('xv + yv'), 'elementwise add'),
@@ -99,10 +99,10 @@ export class GpuGenerator {
     const r0 = S('ups.0.first.weight')[0];
     this.nc0 = this.op({ k: 12, dil: 1, stride: 6, pad: 3, bias: true }, STRIDED, packConv(T('noise_convs.0.weight'), 256, 22, 12, 256, 24), T('noise_convs.0.bias'), 24, 256);
     this.nc1 = this.op({ k: 1, dil: 1, bias: true }, TILE, packConv(T('noise_convs.1.weight'), 128, 22, 1, 128, 24), T('noise_convs.1.bias'), 24, 128);
-    this.up0a = this.op({ k: 1, dil: 1 }, TILE, packConv(T('ups.0.first.weight'), r0, 512, 1), null, 512, r0);
-    this.up0b = this.tOp({ k: 20, stride: 10, pad: 5, bias: false }, packTransposed(T('ups.0.core.weight'), r0, r0, 20), null, r0, r0);
-    this.up0c = this.op({ k: 1, dil: 1, bias: true }, TILE, packConv(T('ups.0.last.weight'), 256, r0, 1), T('ups.0.last.bias'), r0, 256);
-    this.up1 = this.tOp({ k: 12, stride: 6, pad: 3, bias: true }, packTransposed(T('ups.1.weight'), 256, 128, 12), T('ups.1.bias'), 256, 128);
+    this.up0a = this.op({ k: 1, dil: 1 }, TILE, Wt('ups.0.first.weight', r0, 512, 1), null, 512, r0);
+    this.up0b = this.tOp({ k: 20, stride: 10, pad: 5, bias: false }, this.tWeights('ups.0.core.weight', r0, r0, 20), null, r0, r0);
+    this.up0c = this.op({ k: 1, dil: 1, bias: true }, TILE, Wt('ups.0.last.weight', 256, r0, 1), T('ups.0.last.bias'), r0, 256);
+    this.up1 = this.tOp({ k: 12, stride: 6, pad: 3, bias: true }, this.tWeights('ups.1.weight', 256, 128, 12), T('ups.1.bias'), 256, 128);
     this.post = this.op({ k: 7, dil: 1, pad: 3, bias: true }, TILE, packConv(T('conv_post.weight'), 22, 128, 7, 24, 128), padTo(T('conv_post.bias'), 24), 128, 24);
     // The eight residual blocks, then the buffers shared by every window length.
     for (const [name, k, C, short] of BLOCKS) this.blocks.set(name, this.makeBlock(name, k, C, short));
@@ -132,16 +132,43 @@ export class GpuGenerator {
     return this.kerns.get(code);
   }
 
-  // A convolution: its spec (convWGSL), tile, packed weights and bias, its channels and its label.
+  // The weights of a Conv1d `name` ([cout][cin][k]) for op: the tensor as the model file stores it when that is block-quantized and the
+  // layer has no padding (the shader dequantizes it while it loads a tile), else float32 packed for convWGSL.
+  weights(name, cout, cin, k) {
+    const pk = this.part.packed(name);
+    if (!pk || pk.transposed || cout % 4 !== 0 || cin % 8 !== 0) return packConv(this.part.f32(name), cout, cin, k);
+    if (pk.rows !== cout || pk.len !== cin * k || pk.words !== Math.ceil(Math.ceil((cout * cin * k * pk.bits) / 8) / 4)) {
+      throw new Error(`${name}: shape [${pk.shape}], expected [${cout}, ${cin}, ${k}]`);
+    }
+    return pk;
+  }
+
+  // The same for a ConvTranspose1d `name` ([cin][cout][k]), for tOp.
+  tWeights(name, cin, cout, k) {
+    const pk = this.part.packed(name, { taps: k });
+    if (!pk || !pk.transposed || pk.bits !== 4 || cout % 8 !== 0) return packTransposed(this.part.f32(name), cin, cout, k);
+    if (pk.rows !== cout || pk.len !== cin * k || pk.words !== Math.ceil(Math.ceil((cout * cin * k * pk.bits) / 8) / 4)) {
+      throw new Error(`${name}: shape [${pk.shape}], expected [${cin}, ${cout}, ${k}]`);
+    }
+    return pk;
+  }
+
+  // A convolution: its spec (convWGSL), tile, weights (float32 packed for convWGSL, or tensors.js packed()'s result) and bias, its channels
+  // and its label.
   op(spec, tile, w, bias, cin, cout) {
     const label = `conv k${spec.k} d${spec.dil} s${spec.stride ?? 1} ${cin}>${cout}`;
-    return { kern: this.kern(convWGSL(spec, tile)), tile, w: this.upload(w), bias: bias ? this.upload(bias) : null, cin, cout, label,
+    const pk = w.data ? w : null;
+    return { kern: this.kern(convWGSL(pk ? { ...spec, packed: { bits: pk.bits, block: pk.block } } : spec, tile)), tile,
+      w: this.upload(pk ? pk.data : w), bias: bias ? this.upload(bias) : null, cin, cout, label,
       pro: !!spec.prologue, post: spec.residual ? 'res' : spec.accumulate ? 'acc' : null };
   }
 
-  // A transposed convolution (transposedVecWGSL's spec), its packed weights and bias, its channels and its label.
+  // A transposed convolution (transposedVecWGSL's spec), its weights (float32 packed, or tensors.js packed()'s result) and bias, its channels
+  // and its label.
   tOp(spec, w, bias, cin, cout) {
-    return { kern: this.kern(transposedVecWGSL(spec)), w: this.upload(w), bias: bias ? this.upload(bias) : null, cin, cout,
+    const pk = w.data ? w : null;
+    return { kern: this.kern(transposedVecWGSL(pk ? { ...spec, packed: { bits: pk.bits, block: pk.block } } : spec)),
+      w: this.upload(pk ? pk.data : w), bias: bias ? this.upload(bias) : null, cin, cout,
       label: `tconv k${spec.k} s${spec.stride} ${cin}>${cout}` };
   }
 
@@ -154,15 +181,15 @@ export class GpuGenerator {
       if (kk !== k) throw new Error(`${p}: kernel ${kk}, expected ${k}`);
       const bias = part.has(P('bias'));
       return { dense: this.op({ k, dil, pad, prologue: pro, bias, residual: post === 'res', accumulate: post === 'acc' }, tileFor(short, k, cin, cout),
-        packConv(part.f32(P('weight')), cout, cin, k), bias ? part.f32(P('bias')) : null, cin, cout) };
+        this.weights(P('weight'), cout, cin, k), bias ? part.f32(P('bias')) : null, cin, cout) };
     }
     const [r, cin] = part.shape(P('first.weight')), [cout] = part.shape(P('last.weight'));
     if (part.shape(P('core.weight'))[2] !== k) throw new Error(`${p}: core kernel is not ${k}`);
     return {
-      first: this.op({ k: 1, dil: 1, pad: 0, prologue: pro, bias: false }, tileFor(short, 1, cin, r), packConv(part.f32(P('first.weight')), r, cin, 1), null, cin, r),
-      core: this.op({ k, dil, pad, prologue: false, bias: false }, tileFor(short, k, r, r), packConv(part.f32(P('core.weight')), r, r, k), null, r, r),
+      first: this.op({ k: 1, dil: 1, pad: 0, prologue: pro, bias: false }, tileFor(short, 1, cin, r), this.weights(P('first.weight'), r, cin, 1), null, cin, r),
+      core: this.op({ k, dil, pad, prologue: false, bias: false }, tileFor(short, k, r, r), this.weights(P('core.weight'), r, r, k), null, r, r),
       last: this.op({ k: 1, dil: 1, pad: 0, prologue: false, bias: true, residual: post === 'res', accumulate: post === 'acc' }, tileFor(short, 1, r, cout),
-        packConv(part.f32(P('last.weight')), cout, r, 1), part.f32(P('last.bias')), r, cout),
+        this.weights(P('last.weight'), cout, r, 1), part.f32(P('last.bias')), r, cout),
     };
   }
 

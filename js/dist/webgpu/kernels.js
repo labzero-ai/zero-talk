@@ -17,8 +17,12 @@ export const SHARED = 16384;                                    // WebGPU's defa
 // applied to the in-range values only (zero padding comes after the prologue).
 // Weights: vec4 array packed [cin][k][cout] with cout a multiple of 4. The prologue buffers are per input channel:
 // pro (vec4: mean, scale, shift, alpha) and ia (inverse alpha).
+// With `packed` ({ bits, block }) the weights stay block-quantized (tensors.js packed()): w is a u32 array, the codes of the weight matrix
+// [cout][cin k] stored column-major (code number col * cout + row, low bits first) and then its float32 scales [col / block][cout]; cin and
+// cout are the layer's own (cout a multiple of 4, cin a multiple of the channels per pass). The tile load dequantizes them, code * scale
+// rounded once to float32, which is the value the unpacked path uploads, so the arithmetic after the load is the same.
 export const convWGSL = ({ k, dil, stride = 1, pad = (k - 1) * dil / 2, prologue = false, bias = false, residual = false,
-                           accumulate = false }, { TX, TY, CO_PT, L_PT }) => {
+                           accumulate = false, packed = null }, { TX, TY, CO_PT, L_PT }) => {
   if (!Number.isInteger(pad)) throw new Error('convolution padding must be an integer');
   const CO_T = TY * CO_PT, L_T = TX * L_PT, NT = TX * TY, LV = L_PT / 4, CV = CO_PT / 4;
   const tw = stride * L_T + (k - 1) * dil;   // input positions one workgroup reads per channel
@@ -37,7 +41,8 @@ ${range(L_PT).map((j) => `        { let l = l0 + tx + ${j * TX}u; if (l < p.len)
 struct P { len: u32, cin: u32, cout: u32, lin: u32 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> src: array<f32>;
-@group(0) @binding(2) var<storage, read> w: array<vec4<f32>>;
+${packed ? `@group(0) @binding(2) var<storage, read> w: array<u32>;
+const PER = ${32 / packed.bits}u;` : '@group(0) @binding(2) var<storage, read> w: array<vec4<f32>>;'}
 @group(0) @binding(3) var<storage, read_write> dst: array<f32>;
 ${bias ? '@group(0) @binding(4) var<storage, read> bias: array<f32>;' : ''}
 ${residual ? '@group(0) @binding(5) var<storage, read> res: array<f32>;' : ''}
@@ -48,6 +53,7 @@ var<workgroup> ws: array<vec4<f32>, ${CI_C * k * CO_T / 4}>;
 @compute @workgroup_size(${NT})
 fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) tid: u32) {
   let tx = tid % ${TX}u; let ty = tid / ${TX}u; let l0 = wg.x * ${L_T}u; let co0 = wg.y * ${CO_T}u;
+${packed ? `  let sb = (((p.cout * p.cin * ${k}u * ${packed.bits}u + 7u) / 8u) + 3u) / 4u;` : ''}
 ${range(CO_PT).flatMap((i) => range(LV).map((h) => `  var ${acc(i, h)} = vec4<f32>(0.0);`)).join('\n')}
   for (var ci0 = 0u; ci0 < p.cin; ci0 += ${CI_C}u) {
     for (var i = tid; i < ${CI_C * tw}u; i += ${NT}u) {
@@ -59,11 +65,22 @@ ${range(CO_PT).flatMap((i) => range(LV).map((h) => `  var ${acc(i, h)} = vec4<f3
       }
       xs[i] = v;
     }
-    for (var i = tid; i < ${CI_C * k * CO_T / 4}u; i += ${NT}u) {
+${packed ? `    for (var i = tid; i < ${CI_C * k * CO_T / 4}u; i += ${NT}u) {
+      // Four output channels of one input column: their codes are adjacent (one word), and their scales are four floats in a row.
+      let c4 = i % ${CO_T / 4}u; let col = ci0 * ${k}u + i / ${CO_T / 4}u; let co = co0 + c4 * 4u; var v = vec4<f32>(0.0);
+      if (co < p.cout) {
+        let idx = col * p.cout + co; let wd = w[idx / PER]; let sh = ${32 - packed.bits}u - (idx % PER) * ${packed.bits}u;
+        let sp = sb + (col / ${packed.block}u) * p.cout + co;
+        v = vec4<f32>(${range(4).map((m) => `f32(bitcast<i32>(wd << (sh - ${m * packed.bits}u)) >> ${32 - packed.bits}u)`).join(', ')})
+          * vec4<f32>(bitcast<f32>(w[sp]), bitcast<f32>(w[sp + 1u]), bitcast<f32>(w[sp + 2u]), bitcast<f32>(w[sp + 3u]));
+      }
+      ws[i] = v;
+    }`
+ : `    for (var i = tid; i < ${CI_C * k * CO_T / 4}u; i += ${NT}u) {
       let c4 = i % ${CO_T / 4}u; var v = vec4<f32>(0.0);
       if (co0 + c4 * 4u < p.cout) { v = w[(ci0 * ${k}u + i / ${CO_T / 4}u) * (p.cout / 4u) + co0 / 4u + c4]; }
       ws[i] = v;
-    }
+    }`}
     workgroupBarrier();
     for (var cl = 0u; cl < ${CI_C}u; cl++) {
       for (var k = 0u; k < ${k}u; k++) {
@@ -82,14 +99,16 @@ ${store}
 
 // Transposed convolution, eight output channels per thread (cout a multiple of 8): out[co][t] = bias[co] + sum over
 // taps kk with (t + pad - kk) divisible by stride of w[ci][kk][co] * in[ci][(t + pad - kk) / stride]. The weights are
-// packed [ci][k][cout] as vec4s.
-export const transposedVecWGSL = ({ k, stride, pad, bias = false }) => {
+// packed [ci][k][cout] as vec4s. With `packed` ({ bits: 4, block }) they stay block-quantized instead (tensors.js packed() with taps = k): w
+// is a u32 array, the 4-bit codes of the matrix [cout][cin k] column-major (the column of tap kk of channel ci is ci k + kk, whose scale is
+// the file's column ci k + k - 1 - kk) and then the float32 scales [col / block][cout]; the eight codes of a thread's channels are one word.
+export const transposedVecWGSL = ({ k, stride, pad, bias = false, packed = null }) => {
   const init = (o) => (bias ? `vec4<f32>(bias[o + ${o}u], bias[o + ${o + 1}u], bias[o + ${o + 2}u], bias[o + ${o + 3}u])` : 'vec4<f32>(0.0)');
   return `
 struct P { len: u32, cin: u32, cout: u32, lin: u32 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> src: array<f32>;
-@group(0) @binding(2) var<storage, read> w: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> w: ${packed ? 'array<u32>' : 'array<vec4<f32>>'};
 @group(0) @binding(3) var<storage, read_write> dst: array<f32>;
 ${bias ? '@group(0) @binding(4) var<storage, read> bias: array<f32>;' : ''}
 @compute @workgroup_size(64)
@@ -97,6 +116,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
   let t = g.x; let o = g.y * 8u;
   if (t >= p.len || o >= p.cout) { return; }
   let u = i32(t) + ${pad};
+${packed ? `  let sb = ((p.cin * ${k}u * p.cout * 4u + 7u) / 8u + 3u) / 4u;` : ''}
   var a0 = ${init(0)};
   var a1 = ${init(4)};
   for (var kk = u % ${stride}; kk < ${k}; kk += ${stride}) {
@@ -104,9 +124,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
     if (i >= 0 && i < i32(p.lin)) {
       for (var ci = 0u; ci < p.cin; ci++) {
         let s = vec4<f32>(src[ci * p.lin + u32(i)]);
-        let wb = ((ci * ${k}u + u32(kk)) * p.cout + o) / 4u;
+${packed ? `        let wi = (ci * ${k}u + u32(kk)) * p.cout + o; let wd = w[wi / 8u];
+        let sp = sb + ((ci * ${k}u + ${k - 1}u - u32(kk)) / ${packed.block}u) * p.cout + o;
+        let w0 = vec4<f32>(${[0, 1, 2, 3].map((m) => `f32(bitcast<i32>(wd << ${28 - 4 * m}u) >> 28u)`).join(', ')})
+          * vec4<f32>(bitcast<f32>(w[sp]), bitcast<f32>(w[sp + 1u]), bitcast<f32>(w[sp + 2u]), bitcast<f32>(w[sp + 3u]));
+        let w1 = vec4<f32>(${[4, 5, 6, 7].map((m) => `f32(bitcast<i32>(wd << ${28 - 4 * m}u) >> 28u)`).join(', ')})
+          * vec4<f32>(bitcast<f32>(w[sp + 4u]), bitcast<f32>(w[sp + 5u]), bitcast<f32>(w[sp + 6u]), bitcast<f32>(w[sp + 7u]));
+        a0 = fma(s, w0, a0);
+        a1 = fma(s, w1, a1);` : `        let wb = ((ci * ${k}u + u32(kk)) * p.cout + o) / 4u;
         a0 = fma(s, w[wb], a0);
-        a1 = fma(s, w[wb + 1u], a1);
+        a1 = fma(s, w[wb + 1u], a1);`}
       }
     }
   }
