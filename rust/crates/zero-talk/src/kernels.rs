@@ -11,13 +11,18 @@ pub enum Backend {
 }
 
 impl Backend {
-    /// The backends compiled into this build.
+    /// The backends compiled into this build, the fastest first: that one is the default ([`Backend::fastest`]).
     pub fn available() -> Vec<Backend> {
         #[allow(unused_mut)]
         let mut all = vec![Backend::Portable];
         #[cfg(all(feature = "accelerate", target_os = "macos"))]
-        all.push(Backend::Accelerate);
+        all.insert(0, Backend::Accelerate);
         all
+    }
+
+    /// The default: Accelerate on macOS, else the portable backend.
+    pub fn fastest() -> Backend {
+        Self::available()[0]
     }
 
     pub fn parse(name: &str) -> Option<Self> {
@@ -415,8 +420,16 @@ pub fn affine_snake(x: &Act, a: &Affine, alpha: &[f32], inv_alpha: &[f32]) -> Ac
     for c in 0..x.c {
         let (m, k, s, al, ia) = (a.mean[c], a.scale[c], a.shift[c], alpha[c], inv_alpha[c]);
         for (o, &v) in y.row_mut(c).iter_mut().zip(x.row(c)) {
-            let t = (v - m) * k + s;
-            *o = t + ia * sin2(al * t);
+            #[cfg(target_arch = "aarch64")]
+            {
+                let t = (v - m).mul_add(k, s);
+                *o = ia.mul_add(sin2(al * t), t);
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            {
+                let t = (v - m) * k + s;
+                *o = t + ia * sin2(al * t);
+            }
         }
     }
     y
@@ -425,6 +438,29 @@ pub fn affine_snake(x: &Act, a: &Affine, alpha: &[f32], inv_alpha: &[f32]) -> Ac
 /// sin(v)^2 without branches or calls, so the loop around it vectorizes on any SIMD target. Range reduction by pi
 /// (SLEEF's four-part constants for non-FMA arithmetic, exact for |v| < 2^13 pi) and SLEEF's sinf_u35 polynomial;
 /// the sign of sin is irrelevant after squaring. Round-to-nearest uses the 1.5 * 2^23 trick (valid for |v| < 2^22 pi).
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+pub fn sin2(v: f32) -> f32 {
+    // Fused multiply-adds, which aarch64 has in hardware (about 10% less generator time); the results differ from the
+    // unfused version below in the last bits, within the parity gate.
+    const MAGIC: f32 = 12_582_912.0;
+    let q = v.mul_add(std::f32::consts::FRAC_1_PI, MAGIC) - MAGIC;
+    let mut d = (-q).mul_add(3.140625, v);
+    d = (-q).mul_add(0.000_967_025_756_835_937_5, d);
+    d = (-q).mul_add(6.277_114_152_908_325_195_3e-7, d);
+    d = (-q).mul_add(1.215_420_125_655_342_076_2e-10, d);
+    let s = d * d;
+    let mut u: f32 = 2.608_315_980_978_659_354_150_3e-6;
+    u = u.mul_add(s, -0.000_198_106_907_191_686_332_225_8);
+    u = u.mul_add(s, 0.008_333_078_585_565_090_179_443_36);
+    u = u.mul_add(s, -0.166_666_597_127_914_428_710_938);
+    let r = (s * u).mul_add(d, d);
+    r * r
+}
+
+/// The same without fused multiply-adds: other targets have no FMA in the baseline instruction set, where `mul_add` would be a
+/// slow library call, and WebAssembly keeps its bytes the same everywhere.
+#[cfg(not(target_arch = "aarch64"))]
 #[inline(always)]
 pub fn sin2(v: f32) -> f32 {
     const MAGIC: f32 = 12_582_912.0;

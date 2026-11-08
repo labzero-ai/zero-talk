@@ -1,7 +1,7 @@
 // The generator on WebGPU: the network after the harmonic source, with its inverse STFT. Static per-site affines (set per utterance
 // by setUtterance); a plan of calls per window length, all on activation buffers shared by every length. The kernels are in kernels.js, the window
 // geometry in windows.js.
-import { convWGSL, transposedVecWGSL, elementwiseWGSL, polarWGSL, istftFrameWGSL, istftOlaWGSL, TILE, STRIDED } from './kernels.js';
+import { convWGSL, transposedVecWGSL, elementwiseWGSL, polarWGSL, istftFrameWGSL, istftOlaWGSL, TILE, WIDE, STRIDED } from './kernels.js';
 import { SAMPLES_PER_FRAME, CORE, HALO } from './windows.js';
 
 // The buffer usage flags, as the WebGPU spec fixes them, so this module also loads where WebGPU is missing (Node.js, some
@@ -33,6 +33,10 @@ const BLOCKS = [
   ['resblocks.0', 3, 256, true], ['resblocks.1', 7, 256, true], ['resblocks.2', 11, 256, true],
   ['resblocks.3', 3, 128, false], ['resblocks.4', 7, 128, false], ['resblocks.5', 11, 128, false],
 ];
+
+// The tile of a block's convolutions. The blocks on the 10 L grid (short) have few positions and many channels, so they use the wide-tile
+// kernel (more workgroups) for every shape; on the 60 L + 1 grid only the k3 128 > 128 convolution is faster with it (k7 and k11 are slower).
+const tileFor = (short, k, cin, cout) => (short || (k === 3 && cin === 128 && cout === 128) ? WIDE : TILE);
 
 // PyTorch's Conv1d weight [cout][cin][k], packed for convWGSL as [cinPad][k][coutPad], zero outside the layer.
 const packConv = (w, cout, cin, k, coutPad = cout, cinPad = cin) => {
@@ -143,21 +147,21 @@ export class GpuGenerator {
 
   // Conv1d `p`: dense (p.weight, p.bias) or Tucker (p.first, p.core, p.last). pro: the input
   // prologue (the site's affine and snake); post: 'res' (add the residual passed by the caller) or 'acc' (add the stream in place).
-  convLayer(p, { k, dil, pad }, { pro = false, post = null }) {
+  convLayer(p, { k, dil, pad }, { pro = false, post = null, short = false }) {
     const part = this.part, P = (s) => `${p}.${s}`;
     if (part.has(P('weight'))) {
       const [cout, cin, kk] = part.shape(P('weight'));
       if (kk !== k) throw new Error(`${p}: kernel ${kk}, expected ${k}`);
       const bias = part.has(P('bias'));
-      return { dense: this.op({ k, dil, pad, prologue: pro, bias, residual: post === 'res', accumulate: post === 'acc' }, TILE,
+      return { dense: this.op({ k, dil, pad, prologue: pro, bias, residual: post === 'res', accumulate: post === 'acc' }, tileFor(short, k, cin, cout),
         packConv(part.f32(P('weight')), cout, cin, k), bias ? part.f32(P('bias')) : null, cin, cout) };
     }
     const [r, cin] = part.shape(P('first.weight')), [cout] = part.shape(P('last.weight'));
     if (part.shape(P('core.weight'))[2] !== k) throw new Error(`${p}: core kernel is not ${k}`);
     return {
-      first: this.op({ k: 1, dil: 1, pad: 0, prologue: pro, bias: false }, TILE, packConv(part.f32(P('first.weight')), r, cin, 1), null, cin, r),
-      core: this.op({ k, dil, pad, prologue: false, bias: false }, TILE, packConv(part.f32(P('core.weight')), r, r, k), null, r, r),
-      last: this.op({ k: 1, dil: 1, pad: 0, prologue: false, bias: true, residual: post === 'res', accumulate: post === 'acc' }, TILE,
+      first: this.op({ k: 1, dil: 1, pad: 0, prologue: pro, bias: false }, tileFor(short, 1, cin, r), packConv(part.f32(P('first.weight')), r, cin, 1), null, cin, r),
+      core: this.op({ k, dil, pad, prologue: false, bias: false }, tileFor(short, k, r, r), packConv(part.f32(P('core.weight')), r, r, k), null, r, r),
+      last: this.op({ k: 1, dil: 1, pad: 0, prologue: false, bias: true, residual: post === 'res', accumulate: post === 'acc' }, tileFor(short, 1, r, cout),
         packConv(part.f32(P('last.weight')), cout, r, 1), part.f32(P('last.bias')), r, cout),
     };
   }
@@ -178,8 +182,8 @@ export class GpuGenerator {
       const d = DIL[u];
       units.push({
         s1: this.site(name, 1, u, C), s2: this.site(name, 2, u, C),
-        c1: this.convLayer(`${name}.convs1.${u}`, { k, dil: d, pad: (d * (k - 1)) / 2 }, { pro: true }),
-        c2: this.convLayer(`${name}.convs2.${u}`, { k, dil: 1, pad: (k - 1) / 2 }, { pro: true, post: u === 1 ? 'acc' : 'res' }),
+        c1: this.convLayer(`${name}.convs1.${u}`, { k, dil: d, pad: (d * (k - 1)) / 2 }, { pro: true, short }),
+        c2: this.convLayer(`${name}.convs2.${u}`, { k, dil: 1, pad: (k - 1) / 2 }, { pro: true, post: u === 1 ? 'acc' : 'res', short }),
       });
     }
     const rank = Math.max(0, ...units.flatMap((un) => [un.c1, un.c2]).filter((c) => c.first).map((c) => c.first.cout));

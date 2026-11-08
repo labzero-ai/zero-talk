@@ -5,7 +5,11 @@
 // Float32 throughout. Channel counts are multiples of 4 (and of 8 for the transposed kernel).
 
 export const TILE = { TX: 32, TY: 4, CO_PT: 8, L_PT: 8 };       // K-tap convolutions
+export const WIDE = { TX: 32, TY: 8, CO_PT: 4, L_PT: 4 };       // 256 threads, 4 output channels x 4 positions each: 128 positions by 32 channels
 export const STRIDED = { TX: 8, TY: 4, CO_PT: 8, L_PT: 8 };     // the stride-6 noise convolution (input tile fits 16 KB)
+// WIDE gives more, smaller workgroups than TILE (4 to 32 workgroups of TILE cannot fill the GPU on the 10 L stage's 840 positions);
+// the generator uses it there and for the 128 > 128 k3 convolution, where it is faster, and keeps TILE for the long kernels.
+// Each output is still the same ordered sum over input channels and taps, so the audio does not change.
 export const SHARED = 16384;                                    // WebGPU's default workgroup storage limit, in bytes
 
 // Convolution out[co][l] = bias[co] + sum over ci, k of w[ci][k][co] * in[ci][stride l + k dil - pad], where in is the
