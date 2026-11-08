@@ -143,6 +143,7 @@ is shown; quoted texts are exact.
 | Most symbols and emoji (`#`, `~`, `/`, `😀`) | Left out with no warning. Some symbols are read as words: `&` as "and", `%` as "percent", `+` as "plus", `=` as "equals", `@` as "at", `©` as "copyright". |
 | A whole number of more than 306 digits | Left out with no warning; a 307-digit number leaves only its full stop. |
 | Length | A text of 5,016 characters (96 sentences) speaks in full: 306 s of speech, made in 164 s. A text of 50,000 characters (8,908 words) also speaks in full: 3,049 s of speech, made in 1,609 s, peak memory about 1.18 GB. A sentence of 2,815 characters with no full stop speaks in full: 161 s of speech, made in 91 s. The text is split into pieces of at most 510 phonemes; a longer sentence is split too, with no warning. |
+| GPU memory (`engine: 'gpu'`) | About 34–37 MB of GPU buffers for any text length. On a slow GPU the engine switches to a larger window after two slow requests and then uses about 43–46 MB. |
 | Unknown voice ID | `Unknown voice 'labzero-ai/unknown'. The valid ids are: labzero-ai/zero-talk-11m.` |
 | Unknown `engine` | `engine must be 'auto', 'gpu' or 'wasm', not 'cpu'.` With `engine: 'gpu'` in Node.js: `loadVoice: engine 'gpu' needs WebGPU, which only browsers have. Use engine 'auto' or 'wasm' in Node.js.` |
 | `baseUrl` folder without the files | Node.js's own error, for example `ENOENT: no such file or directory, open '<folder>/engine.wasm'`. |
