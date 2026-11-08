@@ -110,6 +110,18 @@ function callLoad(name) {
   if (rc) throw new Error(error);
 }
 
+// The student that zt_load_front leaves out, loaded the first time a sentence runs its front half in WebAssembly (the GPU path's fallback).
+let studentLoaded = false;
+function ensureStudent() {
+  if (studentLoaded) return;
+  const pm = put(modelBytes);
+  const rc = x.zt_load_student(pm, modelBytes.length);
+  const error = rc ? lastError() : '';
+  x.zt_free(pm, modelBytes.length);
+  if (rc) throw new Error(error);
+  studentLoaded = true;
+}
+
 function ensureFull() {
   if (!full) {
     callLoad('zt_load');
@@ -178,6 +190,7 @@ async function startGpu(useAcoustic) {
     if (oom || invalid) throw new Error(`the GPU generator was not made (${oom ? `out of memory: ${oom.message}` : `validation: ${invalid.message}`})`);
     if (gpuFailure) throw new Error(`the GPU engine stopped while it was made: ${gpuFailure}`);
     callLoad('zt_load_front');
+    studentLoaded = false;
     if (useAcoustic) {
       try {
         b = await makeAcoustic(device, model);
@@ -400,6 +413,7 @@ async function gpuSpeak(text, format, send) {
   // run. Null when the acoustic pre-pass does not take the sentence.
   const frontOnWasm = async (i, tm) => {
     const tf = performance.now();
+    ensureStudent();
     if (x.zt_gpu_front(i, SEED) !== 0) throw frontError(lastError());
     const F = x.zt_gpu_frames(), trim = x.zt_gpu_trim();
     if (F > acousticLimit) {
@@ -474,6 +488,7 @@ async function gpuSpeak(text, format, send) {
   // The whole front half in WebAssembly (zt_gpu_sentence): the latents are copied out for the windows to upload.
   const localSentence = (i, tm) => {
     const tf = performance.now();
+    ensureStudent();
     if (x.zt_gpu_sentence(i, SEED) !== 0) throw frontError(lastError());
     const F = x.zt_gpu_frames(), trim = x.zt_gpu_trim();
     const xs = f32At(x.zt_gpu_x_ptr(), 512 * F), har = harOf(F).slice();
