@@ -134,8 +134,9 @@ impl Block {
         BlockState { hist: Act::zeros(self.dw_b.len(), self.kernel - 1), energy: vec![0.0; self.gamma.len()] }
     }
 
-    /// `joined` holds the depthwise input: kernel - 1 columns of context, then x's columns (t + kernel - 1 in all).
-    fn forward(&self, be: Backend, x: &Act, joined: &Act, energy_in: &[f32]) -> (Act, Vec<f32>) {
+    /// `joined` holds the depthwise input: kernel - 1 columns of context, then x's columns (t + kernel - 1 in all). Each temporary is
+    /// dropped as soon as its successor exists, so the sentence-long activations of the frame block are not all held at once.
+    fn forward(&self, be: Backend, x: &Act, joined: Act, energy_in: &[f32]) -> (Act, Vec<f32>) {
         let (c, t, k) = (x.c, x.t, self.kernel);
         let mut h = Act::zeros(c, t);
         for ch in 0..c {
@@ -148,7 +149,11 @@ impl Block {
                 *o = acc;
             }
         }
-        let mut h = self.up.apply(be, &self.norm.apply(&h));
+        drop(joined);
+        let normed = self.norm.apply(&h);
+        drop(h);
+        let mut h = self.up.apply(be, &normed);
+        drop(normed);
         h.map(gelu);
         // response = sqrt(cumulative energy + 1e-6), normalized by its mean over channels (per column).
         let (hc, mut cum) = (h.c, Act::zeros(h.c, t));
@@ -174,17 +179,19 @@ impl Block {
                 *v = *v + g * *v * response + b;
             }
         }
-        let mut y = self.down.apply(be, &h);
-        y.add(x);
         let energy = (0..hc).map(|ch| cum.row(ch)[t - 1]).collect();
+        drop(cum);
+        let mut y = self.down.apply(be, &h);
+        drop(h);
+        y.add(x);
         (y, energy)
     }
 
     /// Causal step: the block's state supplies the left context.
     fn step(&self, be: Backend, st: &mut BlockState, x: &Act) -> Act {
         let joined = std::mem::take(&mut st.hist).cat(x);
-        let (y, energy) = self.forward(be, x, &joined, &st.energy);
         st.hist = joined.columns(joined.t - (self.kernel - 1), joined.t);
+        let (y, energy) = self.forward(be, x, joined, &st.energy);
         st.energy = energy;
         y
     }
@@ -358,7 +365,7 @@ impl TextToAcoustic {
             for c in 0..w {
                 joined.row_mut(c)[before..before + x.t].copy_from_slice(x.row(c));
             }
-            x = b.forward(be, &x, &joined, &vec![0.0; b.gamma.len()]).0;
+            x = b.forward(be, &x, joined, &vec![0.0; b.gamma.len()]).0;
         }
         let dur = self.duration.apply(be, &x);
         (x, dur.data.iter().map(|&d| softplus(d)).collect())

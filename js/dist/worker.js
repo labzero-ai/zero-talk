@@ -124,6 +124,12 @@ function ensureStudent() {
 
 function ensureFull() {
   if (!full) {
+    // With the GPU engine stopped (or never started) nothing will use what the GPU path loaded (the front end, the student): drop it first,
+    // so that the whole pipeline reads its model into that memory. A live GPU engine keeps it (a request for the WebAssembly engine only).
+    if (!gen) {
+      x.zt_unload_gpu();
+      studentLoaded = false;
+    }
     callLoad('zt_load');
     full = true;
   }

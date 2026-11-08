@@ -280,8 +280,9 @@ pub struct Stream<'g> {
 }
 
 /// Pushes are processed in blocks of at most this many frames: buffers are sized by the block, so memory stays
-/// bounded for any push.
-const BLOCK: usize = 16;
+/// bounded for any push. The streaming buffers (the convolutions' histories and the residual queues of every unit) are as wide as a block, so
+/// a smaller block is a smaller generator state: 8 frames hold about half the memory of 16, at about 2% more time, and give the same samples.
+const BLOCK: usize = 8;
 
 impl Stream<'_> {
     pub fn push(&mut self, x: &Act, har: &Act) -> Vec<f32> {

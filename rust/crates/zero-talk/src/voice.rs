@@ -172,12 +172,12 @@ enum Embedded {
 }
 
 #[cfg(feature = "embed")]
-fn embedded(which: Embedded) -> Result<Archive> {
+fn embedded(which: Embedded) -> Result<Archive<'static>> {
     let (bytes, what) = match which {
         Embedded::Model => (zero_talk_model_11m::MODEL, "the model built into this crate"),
         Embedded::Frontend => (zero_talk_model_11m::FRONTEND, "the front-end file built into this crate"),
     };
-    let archive = Archive::parse(bytes.to_vec())?;
+    let archive = Archive::parse_slice(bytes)?;
     match which {
         Embedded::Model => checked_model(archive, what),
         Embedded::Frontend => checked_frontend(archive, what),
@@ -185,13 +185,13 @@ fn embedded(which: Embedded) -> Result<Archive> {
 }
 
 #[cfg(not(feature = "embed"))]
-fn embedded(_which: Embedded) -> Result<Archive> {
+fn embedded(_which: Embedded) -> Result<Archive<'static>> {
     Err(Error::new(
         "this build has no model inside (the default feature `embed` is off): give the model and front-end files with Voice::from_files",
     ))
 }
 
-fn checked_model(ar: Archive, what: &str) -> Result<Archive> {
+fn checked_model<'a>(ar: Archive<'a>, what: &str) -> Result<Archive<'a>> {
     match ar.meta("kind") {
         Ok("tts") => Ok(ar),
         Ok(kind) => Err(Error::new(format!("{what}: this is a '{kind}' file, not a model file"))),
@@ -199,7 +199,7 @@ fn checked_model(ar: Archive, what: &str) -> Result<Archive> {
     }
 }
 
-fn checked_frontend(ar: Archive, what: &str) -> Result<Archive> {
+fn checked_frontend<'a>(ar: Archive<'a>, what: &str) -> Result<Archive<'a>> {
     if ar.meta("kind") != Ok("frontend") {
         return Err(Error::new(format!("{what}: not a front-end file of Zero Talk 11M")));
     }

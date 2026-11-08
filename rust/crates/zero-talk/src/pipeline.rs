@@ -106,9 +106,7 @@ impl Pipeline {
         let sites = self.cond.sites(&moments, self.site_names.iter().map(String::as_str))?;
         let aff = self.gen.condition(&coords, &sites)?;
 
-        let mut source = self.source.stream(seed);
-        let mut wave = source.push(&plan.f0_hz);
-        wave.extend(source.finish());
+        let wave = self.source.wave(seed, &plan.f0_hz);
         let har = self.stft.transform(&wave);
         Ok(Sentence { latents, n, har, stream: self.gen.stream(be, aff), start_frames, pushes: Box::new(ramp(n)) })
     }

@@ -91,10 +91,16 @@ impl<W: std::io::Write> OggStream<W> {
     }
 }
 
+/// The samples that encode_ogg gives the stream at a time.
+const PIECE_SAMPLES: usize = 1 << 15;
+
 /// A complete Ogg Opus file of the mono audio: the stream above, in memory.
 pub fn encode_ogg(audio: &[f32], rate: u32, kbps: u32) -> Result<Vec<u8>, String> {
     let mut stream = OggStream::new(Vec::new(), rate, kbps, None)?;
-    stream.push(audio)?;
+    // In pieces (the stream's file does not depend on the pieces), so that the encoder holds a piece of the audio at a time, not copies of all of it.
+    for piece in audio.chunks(PIECE_SAMPLES) {
+        stream.push(piece)?;
+    }
     stream.finish()
 }
 

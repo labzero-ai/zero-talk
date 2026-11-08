@@ -87,11 +87,20 @@ impl Iterator for Joiner<'_> {
     }
 }
 
+/// The samples by which `speak` grows its array (1 MiB).
+const GROW: usize = 1 << 18;
+
 /// The joined audio of the sentences, whole.
 pub fn speak(p: &Pipeline, be: Backend, sentences: Vec<(Vec<usize>, usize)>, seed: u32) -> Result<Vec<f32>> {
-    let mut audio = Vec::new();
+    let mut audio: Vec<f32> = Vec::new();
     for piece in Joiner::new(p, be, sentences, seed) {
-        audio.extend_from_slice(&piece?);
+        let piece = piece?;
+        // Room is made in steps of GROW samples at most, not by doubling: a doubled array would be up to twice the audio, and copied at
+        // each doubling beside the old one.
+        if audio.capacity() - audio.len() < piece.len() {
+            audio.reserve_exact(piece.len().max(GROW));
+        }
+        audio.extend_from_slice(&piece);
     }
     Ok(audio)
 }

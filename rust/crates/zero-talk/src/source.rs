@@ -95,6 +95,7 @@ pub const FRAME: usize = 300; // samples per 80 Hz frame
 /// Spectrum columns per 80 Hz frame: the STFT in pipeline.rs hops 5 samples.
 pub const COLUMNS_PER_FRAME: usize = 60;
 const QUANTUM: usize = 4; // frames per group
+const WAVE_PIECE_FRAMES: usize = 16 * QUANTUM; // the frames per push of `Source::wave`
 
 /// The source's only weights: the 9-to-1 linear layer.
 pub struct Source {
@@ -107,6 +108,19 @@ impl Source {
         let w = ar.f32("m_source.l_linear.weight")?;
         let b = *ar.f32("m_source.l_linear.bias")?.first().ok_or("m_source.l_linear.bias: expected 1 value")?;
         Ok(Source { w: w.try_into().map_err(|_| "m_source.l_linear.weight: expected 9 weights")?, b })
+    }
+
+    /// The whole sentence's source wave for F0 `f0_hz` (Hz per 80 Hz frame), its random phase seeded `seed`: what a stream gives for all the
+    /// frames pushed at once, then finished. The F0 goes in by pieces of whole groups (any split of the pushes gives the same wave) into one
+    /// array of the final size, so the wave is never held twice.
+    pub fn wave(&self, seed: u32, f0_hz: &[f32]) -> Vec<f32> {
+        let mut stream = self.stream(seed);
+        let mut wave = Vec::with_capacity(FRAME * f0_hz.len());
+        for piece in f0_hz.chunks(WAVE_PIECE_FRAMES) {
+            wave.extend(stream.push(piece));
+        }
+        wave.extend(stream.finish());
+        wave
     }
 
     pub fn stream(&self, seed: u32) -> SourceStream<'_> {
@@ -218,23 +232,26 @@ impl Stft {
     }
 
     pub fn transform(&self, wave: &[f32]) -> Act {
-        let (re, im, frames) = self.complex_planes(wave);
-        let bins = self.window.len() / 2 + 1;
+        let (n_fft, frames) = (self.window.len(), 1 + wave.len() / self.hop);
+        let bins = n_fft / 2 + 1;
+        let (cos, sin) = dft_angles(n_fft);
         let mut out = Act::zeros(2 * bins, frames);
-        for i in 0..bins * frames {
-            out.data[i] = re[i].hypot(im[i]) as f32;
-            out.data[bins * frames + i] = im[i].atan2(re[i]) as f32;
+        let mut seg = vec![0f64; n_fft];
+        // Each column's bins go straight to the output (the same values as `complex_planes` gives, without holding its two float64 planes).
+        for f in 0..frames {
+            self.segment(wave, f, &mut seg);
+            for k in 0..bins {
+                let (re, im) = Self::bin(&seg, &cos, &sin, k, bins);
+                out.data[k * frames + f] = re.hypot(im) as f32;
+                out.data[bins * frames + k * frames + f] = im.atan2(re) as f32;
+            }
         }
         out
     }
 
-    /// The real and imaginary parts, in float64, that `transform` takes the magnitude and the angle of: `bins` rows of `frames` columns
-    /// each, and the number of columns. The angle of a bin of almost no energy is decided by the sign of its imaginary part, so a test
-    /// of the angles needs these.
-    pub fn complex_planes(&self, wave: &[f32]) -> (Vec<f64>, Vec<f64>, usize) {
-        let (n_fft, hop, n) = (self.window.len(), self.hop, wave.len());
-        let bins = n_fft / 2 + 1;
-        let frames = 1 + n / hop;
+    /// The window times the reflection-padded samples of column `f`.
+    fn segment(&self, wave: &[f32], f: usize, seg: &mut [f64]) {
+        let (n_fft, n) = (self.window.len(), wave.len());
         let at = |i: isize| -> f64 {
             let mut j = i - (n_fft / 2) as isize;
             if j < 0 {
@@ -245,22 +262,38 @@ impl Stft {
             }
             wave[j as usize] as f64
         };
+        for (j, v) in seg.iter_mut().enumerate() {
+            *v = at((f * self.hop + j) as isize) * self.window[j];
+        }
+    }
+
+    /// Bin `k` of a segment: its real and imaginary parts.
+    fn bin(seg: &[f64], cos: &[f64], sin: &[f64], k: usize, bins: usize) -> (f64, f64) {
+        let n_fft = seg.len();
+        let (mut re, mut im) = (0f64, 0f64);
+        for j in 0..n_fft {
+            re += seg[j] * cos[k * n_fft + j];
+            im -= seg[j] * sin[k * n_fft + j];
+        }
+        if k == 0 || k == bins - 1 {
+            im = 0.0; // a real signal's DC and Nyquist bins are real, as in torch's real FFT: the angle is 0 or +pi
+        }
+        (re, im)
+    }
+
+    /// The real and imaginary parts, in float64, that `transform` takes the magnitude and the angle of: `bins` rows of `frames` columns
+    /// each, and the number of columns. The angle of a bin of almost no energy is decided by the sign of its imaginary part, so a test
+    /// of the angles needs these.
+    pub fn complex_planes(&self, wave: &[f32]) -> (Vec<f64>, Vec<f64>, usize) {
+        let (n_fft, frames) = (self.window.len(), 1 + wave.len() / self.hop);
+        let bins = n_fft / 2 + 1;
         let (cos, sin) = dft_angles(n_fft);
         let (mut re_plane, mut im_plane) = (vec![0f64; bins * frames], vec![0f64; bins * frames]);
         let mut seg = vec![0f64; n_fft];
         for f in 0..frames {
-            for (j, v) in seg.iter_mut().enumerate() {
-                *v = at((f * hop + j) as isize) * self.window[j];
-            }
+            self.segment(wave, f, &mut seg);
             for k in 0..bins {
-                let (mut re, mut im) = (0f64, 0f64);
-                for j in 0..n_fft {
-                    re += seg[j] * cos[k * n_fft + j];
-                    im -= seg[j] * sin[k * n_fft + j];
-                }
-                if k == 0 || k == bins - 1 {
-                    im = 0.0; // a real signal's DC and Nyquist bins are real, as in torch's real FFT: the angle is 0 or +pi
-                }
+                let (re, im) = Self::bin(&seg, &cos, &sin, k, bins);
                 re_plane[k * frames + f] = re;
                 im_plane[k * frames + f] = im;
             }

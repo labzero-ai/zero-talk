@@ -52,13 +52,22 @@ pub fn header(rate: u32, samples: Option<usize>) -> Vec<u8> {
 
 /// The samples as little-endian 16-bit PCM.
 pub fn pcm_bytes(samples: &[f32]) -> Vec<u8> {
-    samples.iter().flat_map(|&s| pcm16(s).to_le_bytes()).collect()
+    let mut out = Vec::with_capacity(2 * samples.len());
+    push_pcm(&mut out, samples);
+    out
+}
+
+fn push_pcm(out: &mut Vec<u8>, samples: &[f32]) {
+    for &s in samples {
+        out.extend_from_slice(&pcm16(s).to_le_bytes());
+    }
 }
 
 /// A complete WAV file: the header and the samples.
 pub fn encode(samples: &[f32], rate: u32) -> Vec<u8> {
     let mut out = header(rate, Some(samples.len()));
-    out.extend(pcm_bytes(samples));
+    out.reserve_exact(2 * samples.len());
+    push_pcm(&mut out, samples);
     out
 }
 

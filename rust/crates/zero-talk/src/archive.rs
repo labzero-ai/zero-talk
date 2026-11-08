@@ -1,5 +1,6 @@
 //! The Zero Talk container, version 1: the model file and the front-end file. Each holds named tensors and metadata, with a
 //! checksum over the rest of the file. Tensors are returned as float32 in PyTorch's shape and memory layout.
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -25,8 +26,10 @@ pub struct Entry {
     nbytes: usize,
 }
 
-pub struct Archive {
-    bytes: Vec<u8>,
+/// A parsed container: owned by it (`parse`, `open`), or borrowed from the caller's bytes (`parse_slice`), which are then neither
+/// copied nor kept longer than the archive.
+pub struct Archive<'a> {
+    bytes: Cow<'a, [u8]>,
     pub meta: HashMap<String, String>,
     pub entries: HashMap<String, Entry>,
 }
@@ -57,13 +60,24 @@ impl<'a> Cursor<'a> {
     }
 }
 
-impl Archive {
+impl Archive<'static> {
     pub fn open(path: &Path) -> Result<Self> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {}", path.display(), io_message(&e)))?;
         Self::parse(bytes).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     pub fn parse(bytes: Vec<u8>) -> Result<Self> {
+        Self::from_bytes(Cow::Owned(bytes))
+    }
+}
+
+impl<'a> Archive<'a> {
+    /// The archive of `bytes`, which stay where they are: no copy of the file is made.
+    pub fn parse_slice(bytes: &'a [u8]) -> Result<Self> {
+        Self::from_bytes(Cow::Borrowed(bytes))
+    }
+
+    fn from_bytes(bytes: Cow<'a, [u8]>) -> Result<Self> {
         if bytes.len() < 16 || &bytes[..4] != b"ZERO" {
             return Err("not a Zero Talk file".into());
         }
@@ -210,11 +224,11 @@ impl Archive {
 
 /// A model part: the tensors whose names start with `prefix.`, addressed without it.
 pub struct Part<'a> {
-    ar: &'a Archive,
+    ar: &'a Archive<'a>,
     prefix: String,
 }
 
-impl Archive {
+impl Archive<'_> {
     pub fn part(&self, prefix: &str) -> Part<'_> {
         Part { ar: self, prefix: format!("{prefix}.") }
     }

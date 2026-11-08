@@ -42,6 +42,8 @@
 //!   The frame features stay on the GPU on this path: zt_gpu_front_frames_ptr and zt_gpu_front_frames_len give none (length 0).
 //!   zt_gpu_counts and zt_gpu_plan reject a NaN, an infinite, a negative or an over-large duration, and a NaN or infinite raw F0 or
 //!   energy: -1 with the message, and nothing stays prepared, so the worker falls back to zt_gpu_front, which stays the reference.
+//! - zt_unload_gpu(): drops everything the GPU path holds (zt_load_front's inputs, the student, the sentences, the sentence prepared), for a
+//!   caller that goes on in WebAssembly alone: zt_load then reads its model into the memory they leave.
 //! - zt_post_limit(ptr, count): the soft limiter in place on float32 samples at ptr.
 //! - zt_encode(ptr, count, format) -> 0, or -1: float32 samples at ptr encoded as zt_speak encodes its audio.
 use std::cell::RefCell;
@@ -228,12 +230,15 @@ pub unsafe extern "C" fn zt_load(model: *const u8, model_len: usize, frontend: *
 }
 
 /// The checks of the `zero-talk` command (checked_model, checked_frontend in the crate's cli module): the two files' kinds.
-fn checked(model: &[u8], frontend: &[u8]) -> Result<(Archive, Archive), String> {
-    let fe = Archive::parse(frontend.to_vec()).map_err(|e| format!("front-end file: {e}"))?;
+///
+/// The archives read the caller's bytes where they are (no copy of the model is made in this module's memory), so they are dropped
+/// before the caller frees the bytes.
+fn checked<'a>(model: &'a [u8], frontend: &'a [u8]) -> Result<(Archive<'a>, Archive<'a>), String> {
+    let fe = Archive::parse_slice(frontend).map_err(|e| format!("front-end file: {e}"))?;
     if fe.meta("kind") != Ok("frontend") {
         return Err("front-end file: not a front-end data file; use the front-end file that ships with this version".into());
     }
-    let md = Archive::parse(model.to_vec()).map_err(|e| format!("model file: {e}"))?;
+    let md = Archive::parse_slice(model).map_err(|e| format!("model file: {e}"))?;
     match md.meta("kind") {
         Ok("tts") => {}
         Ok(kind) => return Err(format!("model file: this is a {kind} file, not a model file")),
@@ -299,7 +304,7 @@ pub unsafe extern "C" fn zt_load_student(model: *const u8, model_len: usize) -> 
 }
 
 fn load_student(model: &[u8]) -> Result<(), String> {
-    let md = Archive::parse(model.to_vec()).map_err(|e| format!("model file: {e}"))?;
+    let md = Archive::parse_slice(model).map_err(|e| format!("model file: {e}"))?;
     let student = TextToAcoustic::load(&md.part("student"))?;
     with(|st| match st.gpu.as_mut() {
         Some(gpu) => {
@@ -308,6 +313,18 @@ fn load_student(model: &[u8]) -> Result<(), String> {
         }
         None => Err("no GPU front loaded: call zt_load_front first".to_string()),
     })
+}
+
+/// Drops what the GPU path holds (zt_load_front's inputs, the student zt_load_student loaded, the last text's sentences and the sentence
+/// prepared), for a caller that goes on in WebAssembly alone: zt_load then reads its model into the memory they leave. The GPU calls
+/// give their "no GPU front loaded" error after it, until zt_load_front is called again. Nothing happens when the GPU path is not loaded.
+#[no_mangle]
+pub extern "C" fn zt_unload_gpu() {
+    with(|st| {
+        st.prepared = Prepared::default();
+        st.sentences = Vec::new();
+        st.gpu = None;
+    });
 }
 
 /// The conditioner's site names, with their ".norm" suffix: the "name:start:end" entries of the model's `conditioner_sites`, read as
@@ -392,10 +409,16 @@ fn plan_text(frontend: &Frontend, vocab: &Vocab, voice_of: impl Fn(&[usize]) -> 
 /// The last step of `zero-talk`: the audio's duration and its bytes in `format`.
 fn set_audio(st: &mut State, audio: &[f32], format: u32) -> Result<(), String> {
     st.duration = audio.len() as f64 / SAMPLE_RATE as f64;
+    // The previous result is released first, so that its block can serve the new one (and the new one does not grow the memory beside it).
+    st.out = Vec::new();
     st.out = match format {
         0 => wav::encode(audio, SAMPLE_RATE),
         1 => opus::encode_ogg(audio, SAMPLE_RATE, opus::DEFAULT_KBPS)?,
-        _ => audio.iter().flat_map(|x| x.to_le_bytes()).collect(),
+        _ => {
+            let mut out = Vec::with_capacity(4 * audio.len());
+            audio.iter().for_each(|x| out.extend_from_slice(&x.to_le_bytes()));
+            out
+        }
     };
     Ok(())
 }
@@ -517,10 +540,7 @@ fn site_moments(gpu: &GpuFront, coords: &[f32; COORDS], ids: &[usize], stats: &[
 
 /// Stage 6 of gpu_sentence: the harmonic source's spectrum for the F0 `f0_hz` (Hz per frame), its random phase seeded `seed`.
 fn source_spectrum(gpu: &GpuFront, seed: u32, f0_hz: &[f32]) -> Act {
-    let mut source = gpu.source.stream(seed);
-    let mut wave = source.push(f0_hz);
-    wave.extend(source.finish());
-    gpu.stft.transform(&wave)
+    gpu.stft.transform(&gpu.source.wave(seed, f0_hz))
 }
 
 /// The harmonic source of the sentence prepared by zt_gpu_front, computed as zt_gpu_source asks for it. The stream takes the F0 in
@@ -582,18 +602,19 @@ fn gpu_sentence(i: usize, seed: u32) -> Result<(), String> {
             return Err("no GPU front loaded: call zt_load_front first".to_string());
         };
         let (ids, voice) = sentence_inputs(gpu, &st.sentences, i)?;
-        let planned = plan_sentence(gpu, ids, voice)?;
-        let n = planned.frames.t;
+        let Planned { coords, start_frames, frames, plan, .. } = plan_sentence(gpu, ids, voice)?;
+        let n = frames.t;
         let student = gpu.student.as_ref().ok_or("the student is not loaded: call zt_load_student first")?;
-        let latents = prepass(student, Backend::Portable, &planned.frames, &planned.plan);
-        let (moments, channels) = site_moments(gpu, &planned.coords, ids, &latent_statistics(&latents))?;
-        let har = source_spectrum(gpu, seed.wrapping_add(i as u32), &planned.plan.f0_hz);
+        let latents = prepass(student, Backend::Portable, &frames, &plan);
+        drop(frames); // the frame features are not needed again (as in Pipeline::begin)
+        let (moments, channels) = site_moments(gpu, &coords, ids, &latent_statistics(&latents))?;
+        let har = source_spectrum(gpu, seed.wrapping_add(i as u32), &plan.f0_hz);
         st.prepared = Prepared {
             frames: n,
-            start_frames: planned.start_frames,
+            start_frames,
             x: latents.data,
             har: har.data,
-            coords: planned.coords,
+            coords,
             moments,
             channels,
             ..Prepared::default()
