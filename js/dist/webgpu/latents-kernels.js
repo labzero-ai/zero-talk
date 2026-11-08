@@ -1,7 +1,11 @@
-// WebGPU kernels for the student's acoustic pre-pass. Activations are channel-major [c][t] f32 over the sentence's T frames, except the mixer's recurrence,
+// WebGPU kernels for the student's acoustic pre-pass. Activations are channel-major [c][t] f32 over the T columns of a pass, except the mixer's recurrence,
 // which reads and writes [t][c] (qkvT, gT, yT) so that the values of one step are contiguous. Every kernel takes T (and any element
 // count) from its uniform and never from a buffer's size. The Linears are the generator's tiled convolution (kernels.js, k = 1)
 // with packed weights (latents.js). The arithmetic follows the reference implementation in its order of operations.
+// The acoustic blocks run in chunks of columns (latents.js): the kernels whose result depends on the earlier columns have a chunked form
+// (DEPTHWISE_CHUNK, SCAN_CHUNK, RECURRENCE_CHUNK) that starts from the state the last chunk left (the six columns of history, the running
+// energy, the delta-rule memory) and does each column's arithmetic in the same order as the whole-sentence form. A chunk's place in the sentence comes
+// from a small uniform `cu` = { g0: the chunk's first column in the sentence, f: the sentence's columns, n: the text encoder's tokens, 0 }.
 
 const range = (n) => [...Array(n).keys()];
 
@@ -36,6 +40,27 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
   o[i] = cb[c] + cw[2u * c] * f0[t] + cw[2u * c + 1u] * en[t] + fr[i];
 }`;
 
+// The chunked condition: the same sum as CONDITION for the columns g0 .. g0 + T of the sentence, whose frames fr are [384][f] and f0 and energy [f].
+export const CONDITION_CHUNK = `
+struct P { t: u32 }
+struct C { g0: u32, f: u32, n: u32, z: u32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read> fr: array<f32>;
+@group(0) @binding(2) var<storage, read> f0: array<f32>;
+@group(0) @binding(3) var<storage, read> en: array<f32>;
+@group(0) @binding(4) var<storage, read> cw: array<f32>;
+@group(0) @binding(5) var<storage, read> cb: array<f32>;
+@group(0) @binding(6) var<storage, read_write> o: array<f32>;
+@group(0) @binding(7) var<uniform> cu: C;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let t = g.x;
+  let c = g.y;
+  if (t >= p.t) { return; }
+  let s = cu.g0 + t;
+  o[c * p.t + t] = cb[c] + cw[2u * c] * f0[s] + cw[2u * c + 1u] * en[s] + fr[c * cu.f + s];
+}`;
+
 // Depthwise convolution, kernel 7, zero padding: out[c][t] = bias[c] + sum_j w[c][j] x[c][t - 6 + after + j] The
 // acoustic pre-pass is causal (after = 0, zero history); the text encoder's blocks see `after` columns past t (its lookahead) and 6 - after before it.
 export const DEPTHWISE = `
@@ -56,6 +81,66 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
     if (s >= 6u && s - 6u < p.t) { acc = acc + w[c * 7u + j] * x[c * p.t + s - 6u]; }
   }
   o[c * p.t + t] = acc;
+}`;
+
+// The chunked causal depthwise convolution (after = 0): the same sum as DEPTHWISE, in the same order of taps, where the six columns before the
+// chunk are in hist [384][6] (the last six columns of the previous chunk's input, saved by HISTORY) and columns before the sentence's first are zero padding (skipped).
+export const DEPTHWISE_CHUNK = `
+struct P { t: u32 }
+struct C { g0: u32, f: u32, n: u32, z: u32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read> w: array<f32>;
+@group(0) @binding(3) var<storage, read> bias: array<f32>;
+@group(0) @binding(4) var<storage, read_write> o: array<f32>;
+@group(0) @binding(5) var<storage, read> hist: array<f32>;
+@group(0) @binding(6) var<uniform> cu: C;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let t = g.x;
+  let c = g.y;
+  if (t >= p.t) { return; }
+  var acc = bias[c];
+  for (var j = 0u; j < 7u; j++) {
+    let s = t + j;
+    if (cu.g0 + s >= 6u) {
+      var v = 0.0;
+      if (s >= 6u) { v = x[c * p.t + s - 6u]; } else { v = hist[c * 6u + s]; }
+      acc = acc + w[c * 7u + j] * v;
+    }
+  }
+  o[c * p.t + t] = acc;
+}`;
+
+// The last six columns of a chunk's block input into hist [384][6], for the next chunk's DEPTHWISE_CHUNK (a chunk shorter than six is the sentence's last).
+export const HISTORY = `
+struct P { t: u32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> hist: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let i = g.x;
+  if (i >= 2304u || p.t < 6u) { return; }
+  let c = i / 6u;
+  let k = i - c * 6u;
+  hist[i] = x[c * p.t + p.t - 6u + k];
+}`;
+
+// A chunk's columns [r][t] (stride the chunk's T) into rows of the sentence's buffer [r][f] at the columns g0 .. g0 + T.
+export const PLACE = `
+struct P { t: u32 }
+struct C { g0: u32, f: u32, n: u32, z: u32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read> src: array<f32>;
+@group(0) @binding(2) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(3) var<uniform> cu: C;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let t = g.x;
+  let r = g.y;
+  if (t >= p.t) { return; }
+  dst[r * cu.f + cu.g0 + t] = src[r * p.t + t];
 }`;
 
 // LayerNorm over the 384 channels of each column, one thread per column: the channels of a column are read by the threads of a
@@ -138,6 +223,28 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
   o[c * p.f + f] = feats[c * p.n + tok[f]] + v;
 }`;
 
+// The frame expansion of the columns g0 .. g0 + T of the sentence (the chunk's own columns [384][T]); tok and phase are the sentence's.
+export const EXPAND_CHUNK = `
+struct P { t: u32 }
+struct C { g0: u32, f: u32, n: u32, z: u32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read> feats: array<f32>;
+@group(0) @binding(2) var<storage, read> tok: array<u32>;
+@group(0) @binding(3) var<storage, read> phase: array<f32>;
+@group(0) @binding(4) var<storage, read> pw: array<f32>;
+@group(0) @binding(5) var<storage, read> pb: array<f32>;
+@group(0) @binding(6) var<storage, read_write> o: array<f32>;
+@group(0) @binding(7) var<uniform> cu: C;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) g: vec3<u32>) {
+  let f = g.x;
+  let c = g.y;
+  if (f >= p.t) { return; }
+  let s = cu.g0 + f;
+  let v = pw[c] * phase[s] + pb[c];
+  o[c * p.t + f] = feats[c * cu.n + tok[s]] + v;
+}`;
+
 // The cumulative energy of each hidden channel from a fresh state: cum[c][t] = sum over s <= t of h[c][s]^2. One workgroup per
 // channel scans the row in chunks of 256 with an inclusive Hillis-Steele scan in workgroup memory (float32 sums in a different
 // order from a sequential loop: rounding only).
@@ -173,6 +280,47 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) i
     if (i == 0u) { carry = carry + sh[255]; }
     workgroupBarrier();
   }
+}`;
+
+// SCAN for a chunk that starts at a multiple of 256 columns: the running energy enters from st [384] (the last chunk's total; zero at the sentence's
+// first column) and the chunk's total is left there. The pieces of 256 and their order are those of the whole row.
+export const SCAN_CHUNK = `
+struct P { t: u32 }
+struct C { g0: u32, f: u32, n: u32, z: u32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> cum: array<f32>;
+@group(0) @binding(3) var<storage, read_write> st: array<f32>;
+@group(0) @binding(4) var<uniform> cu: C;
+var<workgroup> sh: array<f32, 256>;
+var<workgroup> carry: f32;
+@compute @workgroup_size(256)
+fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) i: u32) {
+  let c = wg.x;
+  if (i == 0u) { carry = select(0.0, st[c], cu.g0 > 0u); }
+  workgroupBarrier();
+  for (var base = 0u; base < p.t; base += 256u) {
+    let t = base + i;
+    var v = 0.0;
+    if (t < p.t) {
+      let h = x[c * p.t + t];
+      v = h * h;
+    }
+    sh[i] = v;
+    workgroupBarrier();
+    for (var off = 1u; off < 256u; off = off * 2u) {
+      var pv = 0.0;
+      if (i >= off) { pv = sh[i - off]; }
+      workgroupBarrier();
+      sh[i] = sh[i] + pv;
+      workgroupBarrier();
+    }
+    if (t < p.t) { cum[c * p.t + t] = carry + sh[i]; }
+    workgroupBarrier();
+    if (i == 0u) { carry = carry + sh[255]; }
+    workgroupBarrier();
+  }
+  if (i == 0u) { st[c] = carry; }
 }`;
 
 // The response's scale per column: scale[t] = (sum over channels of sqrt(cum[c][t] + 1e-6)) / 384 + 1e-6, the channel sum in order.
@@ -307,17 +455,24 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 // (double-buffered by the step's parity: one barrier per step).
 // Inputs: qkvT [t][1152] (q, k, v blocks of 384 each, head-major within a block), gT [t][12] (alpha and beta), nrm [t][12]; output yT [t][384].
 // The loops over the 64 rows are unrolled.
-const recurrence = () => {
+// The chunked form (RECURRENCE_CHUNK) starts a chunk from the memory the last one left in mem [6][64][64] (thread j's column of each row, at
+// (head * 64 + i) * 64 + j; zero at the sentence's first column) and stores it back at the end; the steps are the same.
+const recurrence = (chunked) => {
   const decl = range(64).map((i) => `  var m${i}: f32 = 0.0;`).join('\n');
+  const load = range(64).map((i) => `    m${i} = mem[mb + ${i * 64}u];`).join('\n');
+  const store = range(64).map((i) => `  mem[mb + ${i * 64}u] = m${i};`).join('\n');
   const decay = range(64).map((i) => `    m${i} = m${i} * al; acc = acc + (sk[b + ${i}u] * kf) * m${i};`).join('\n');
   const write = range(64).map((i) => `    let wk${i} = be * (sk2[b + ${i}u] * kf); m${i} = m${i} + wk${i} * rr; acc2 = acc2 + (sq[b + ${i}u] * qf) * m${i};`).join('\n');
   return `
 struct P { t: u32 }
+${chunked ? 'struct C { g0: u32, f: u32, n: u32, z: u32 }' : ''}
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> qkv: array<f32>;
 @group(0) @binding(2) var<storage, read> gt: array<f32>;
 @group(0) @binding(3) var<storage, read_write> y: array<f32>;
 @group(0) @binding(4) var<storage, read> nrm: array<f32>;
+${chunked ? `@group(0) @binding(5) var<storage, read_write> mem: array<f32>;
+@group(0) @binding(6) var<uniform> cu: C;` : ''}
 var<workgroup> sq: array<f32, 128>;
 var<workgroup> sk: array<f32, 128>;
 var<workgroup> sk2: array<f32, 128>;
@@ -326,6 +481,10 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) j
   let head = wg.x;
   let hj = head * 64u + j;
 ${decl}
+${chunked ? `  let mb = head * 4096u + j;
+  if (cu.g0 > 0u) {
+${load}
+  }` : ''}
   var nq = qkv[hj];
   var nk = qkv[384u + hj];
   var nv = qkv[768u + hj];
@@ -361,6 +520,8 @@ ${decay}
 ${write}
     y[t * 384u + hj] = acc2;
   }
+${chunked ? store : ''}
 }`;
 };
-export const RECURRENCE = recurrence();
+export const RECURRENCE = recurrence(false);
+export const RECURRENCE_CHUNK = recurrence(true);

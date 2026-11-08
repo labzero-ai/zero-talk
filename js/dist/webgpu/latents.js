@@ -1,12 +1,15 @@
 // The student's acoustic pre-pass on WebGPU : one push of a whole sentence from a fresh state, with the latents [512][T] left on the GPU. The weights come from the student part of the model, checked
 // against the settings and shapes the kernels assume. The kernels are in latents-kernels.js and the Linears are the generator's tiled
-// convolution (kernels.js, k = 1). Built like generator.js: an arena sized for the current capacity and shared by every length,
-// a plan of calls per length with its uniforms and bind groups, and one readback buffer for the latents. A run
-// is one compute pass, in call order.
+// convolution (kernels.js, k = 1). Built like generator.js: a plan of calls per length with its uniforms and bind groups.
+// The pre-pass is causal, so a sentence runs in chunks of CHUNK columns (the last one shorter), each one compute pass in call order and one
+// queue submission, with the state a chunk hands to the next kept in small buffers: the six columns of history before each block's depthwise
+// convolution, the running energy of each block's scan, and the delta-rule memory of each mixer. The activations are therefore the size of a chunk,
+// fixed for every sentence (the chunk arena); only the sentence's latents [512][T] (which the generator reads by window, and the conditioner's
+// statistics need whole) and its F0 and energy grow with the sentence (capacity). The latents are read back through two small buffers, a group at a time.
 // The text encoder: textInput gives x0 [384][n]; encode runs the text blocks (the acoustic ConvNeXt block, with the depthwise
 // context centred on the lookahead) and leaves the features [384][n] in FEATS, and reads back the durations (40 Hz units, before the
-// rounding). The frame pass: frames(counts40, F) expands the features to F frames (XA), runs the frame block into XB, which is
-// where run(null, ...) takes the frames, and reads back the raw F0 (after the softplus) and energy.
+// rounding). The frame pass: frames(counts40, F) expands the features to F frames (XA), runs the frame block (in chunks, like the acoustic blocks) into
+// the first rows of the latents buffer, where run(null, ...) takes the frames, and reads back the raw F0 (after the softplus) and energy.
 import { convWGSL, TILE } from './kernels.js';
 import * as KN from './latents-kernels.js';
 
@@ -27,22 +30,33 @@ export const LATENTS = 512;
 export const BLOCKS = 6;
 export const MIXER_AFTER = [1, 4];
 export const MAX_FRAMES = 2600;    // the most frames of a sentence the acoustic pre-pass takes; 504 tokens already reach 2,262 frames
-// The arena's capacities in frames: a growth goes to the first of these that holds the sentence (never beyond MAX_FRAMES).
-export const BUCKETS = [600, 1024, 1536, 2048, MAX_FRAMES];
-export const MAX_TOKENS = 512;     // the most tokens of a sentence the text encoder takes; the smallest arena holds 600 frames
+// The capacities in frames of the sentence's buffers (latents, F0, energy): a growth goes to the first of these that holds the sentence (never beyond MAX_FRAMES).
+export const BUCKETS = [600, 800, 1000, 1250, 1500, 1800, 2200, MAX_FRAMES];
+export const MAX_TOKENS = 512;     // the most tokens of a sentence the text encoder takes
+export const CHUNK = 512;          // the columns of a chunk, a multiple of 256 (the energy scan's pieces) and at least MAX_TOKENS (the text encoder runs in one piece)
 export const COORDS = 4;           // the voice's length coordinates (voice_fold has 1 + COORDS rows of WIDTH)
-// The arena's buffers in words per frame (a run of T frames uses the first T frames of each row). The frames share the storage of XB
-// (the condition reads them before block 0's down projection writes XB), and the mixer's HN, GP, YT and GM share those of the block
-// buffers N, H, D and H2, which are free after the last block (each kernel reads its inputs before its output is written, see buildPlan).
-// The mixer's reciprocal norms [t][12] (PREPARE) share CUM: a mixer does not otherwise use it, and the next block's energy scan writes it after the mixer.
-export const PER_FRAME = { XA: WIDTH, XB: WIDTH, D: WIDTH, N: WIDTH, H: WIDTH, H2: WIDTH, CUM: WIDTH, SC: 1, F0: 1, EN: 1,
-  QKV: FEATURES, QKVT: FEATURES, G: DECAY, GT: DECAY };
-// The latents are one [512][T] buffer per arena: a run's latents are valid until the next run is submitted (the worker reads a sentence's
+export const HIST_COLS = KERNEL - 1; // the columns of history before a depthwise convolution
+export const RING = 512 * 1024;    // bytes of each of the two readback buffers (the latents are read back in groups of this size)
+// The chunk arena's buffers in words per column (a chunk of T columns uses the first T columns of each row). Values that are not alive together share
+// a buffer, and no dispatch reads and writes one (see planner): in a block the depthwise output D is dead once the norm has read it, so the hidden layer H
+// takes its place; the norm output N is dead once the up projection has read it, so the response H2 takes its place. In a mixer HN and GM are N (HN is dead after
+// the gate Linear, GM is made by the head norm), GP is D, and YT is QKV (dead once the transposes have read it). The output Linear's rows (512 per column)
+// go to QKV, which the last mixer has finished with. The mixer's reciprocal norms [t][12] (PREPARE) share CUM: a mixer does not otherwise use it,
+// and the next block's energy scan writes it after the mixer.
+export const PER_COLUMN = { XA: WIDTH, XB: WIDTH, D: WIDTH, N: WIDTH, CUM: WIDTH, SC: 1, QKV: FEATURES, QKVT: FEATURES, G: DECAY, GT: DECAY };
+// The sentence's buffers in words per frame: the latents [512][T] (stride T) and the F0 and energy [T]. The frame pass leaves the sentence's frames [384][T] in
+// the first 384 rows of the latents buffer: a chunk's condition reads its columns of the frames before its output writes the same columns of the latents,
+// and no other chunk's columns are touched. The latents are valid until the next frame pass or run is submitted (the worker reads a sentence's
 // windows before it prepares the next sentence, so no window reads an overwritten run).
-export const WORDS_PER_FRAME = Object.values(PER_FRAME).reduce((a, b) => a + b, 0) + LATENTS;
-// The bytes of an arena for `frames` frames (its activations and latents) and of its readback buffer.
-export const arenaBytes = (frames) => 4 * WORDS_PER_FRAME * frames;
-export const readbackBytes = (frames) => 4 * LATENTS * frames;
+export const PER_FRAME = { LAT: LATENTS, F0: 1, EN: 1 };
+export const WORDS_PER_COLUMN = Object.values(PER_COLUMN).reduce((a, b) => a + b, 0);
+export const WORDS_PER_FRAME = Object.values(PER_FRAME).reduce((a, b) => a + b, 0);
+// The bytes of the chunk arena (the same for every sentence), of the sentence's buffers for `frames` frames, and of the two readback buffers.
+export const chunkBytes = 4 * WORDS_PER_COLUMN * CHUNK;
+export const sentenceBytes = (frames) => 4 * WORDS_PER_FRAME * frames;
+export const arenaBytes = (frames) => chunkBytes + sentenceBytes(frames);
+export const readbackBytes = () => 2 * RING;
+const STATE_BYTES = 4 * (BLOCKS + 1) * (WIDTH * HIST_COLS + WIDTH) + 4 * MIXER_AFTER.length * HEADS * HEAD_DIM * HEAD_DIM; // the history, energy and memory
 const MAX_PLANS = 16;
 const CONV_L = TILE.TX * TILE.L_PT;   // columns per convolution workgroup
 const CONV_CO = TILE.TY * TILE.CO_PT; // output channels per convolution workgroup
@@ -103,12 +117,11 @@ export const checkModel = (part) => {
   }
 };
 
-// The most frames the acoustic pre-pass takes on this device: the QKV buffer (1152 words per frame) must fit a storage binding and a buffer, and the
-// elementwise dispatches (ceil(384 T / 256) workgroups) must fit the per-dimension workgroup limit.
+// The most frames the acoustic pre-pass takes on this device: the latents [512][T] must fit a storage binding and a buffer (the dispatches are
+// the size of a chunk, whatever the sentence's length).
 export const frameLimit = (device) => {
   const l = device.limits;
-  return Math.min(Math.floor(l.maxStorageBufferBindingSize / (4 * FEATURES)), Math.floor(l.maxBufferSize / (4 * FEATURES)),
-    Math.floor((l.maxComputeWorkgroupsPerDimension * 256) / WIDTH));
+  return Math.min(Math.floor(l.maxStorageBufferBindingSize / (4 * LATENTS)), Math.floor(l.maxBufferSize / (4 * LATENTS)));
 };
 
 // The latent statistics of a read-back latent array [512][T] (stride T): per channel the mean over the T frames,
@@ -156,7 +169,7 @@ export const textInput = ({ embed, fold }, ids, coords) => {
 };
 
 export class GpuAcoustic {
-  // An acoustic pre-pass for sentences of up to maxFrames frames (its arena's capacity; ensureCapacity grows it).
+  // An acoustic pre-pass for sentences of up to maxFrames frames (the capacity of its sentence buffers; ensureCapacity grows it).
   static async create(device, part, { maxFrames = MAX_FRAMES } = {}) {
     const b = new GpuAcoustic(device, part, maxFrames);
     await b.ready;
@@ -167,21 +180,24 @@ export class GpuAcoustic {
   constructor(device, part, maxFrames) {
     checkModel(part);
     if (!Number.isInteger(maxFrames) || maxFrames < 1) throw new Error(`maxFrames must be a positive integer, not ${maxFrames}`);
-    if (maxFrames > MAX_FRAMES) throw new Error(`maxFrames ${maxFrames} is above MAX_FRAMES (${MAX_FRAMES}): the frame pass's readbacks are sized for it`);
+    if (maxFrames > MAX_FRAMES) throw new Error(`maxFrames ${maxFrames} is above MAX_FRAMES (${MAX_FRAMES}): the frame pass's readback is sized for it`);
     const limit = frameLimit(device);
-    if (maxFrames > limit) throw new Error(`maxFrames ${maxFrames} is above this device's limit of ${limit} frames (the QKV buffer of 1152 words per frame and the workgroup limit)`);
+    if (maxFrames > limit) throw new Error(`maxFrames ${maxFrames} is above this device's limit of ${limit} frames (the latents buffer of 512 words per frame)`);
     Object.assign(this, { device, part, maxFrames, keep: [], arenaBufs: [], plans: new Map(), kerns: new Map(), weightBytes: 0,
       readPending: false, failedFrames: null, textPending: false, textFor: null, framesPending: false, framesFor: null });
     // The recurrence and its prepare dispatch (PREPARE, before each mixer's recurrence).
     const rec = KN.RECURRENCE, prep = KN.PREPARE;
     this.k = {
       conv: this.kern(convWGSL({ k: 1, dil: 1, pad: 0, bias: true }, TILE), 'linear'),
-      cond: this.kern(KN.CONDITION, 'condition'), dw: this.kern(KN.DEPTHWISE, 'depthwise'), ln: this.kern(KN.LAYERNORM, 'layer norm'),
+      cond: this.kern(KN.CONDITION_CHUNK, 'condition'), dw: this.kern(KN.DEPTHWISE, 'depthwise'), ln: this.kern(KN.LAYERNORM, 'layer norm'),
       gelu: this.kern(KN.GELU, 'gelu'), scan: this.kern(KN.SCAN, 'energy scan'), scale: this.kern(KN.SCALE, 'response scale'),
       resp: this.kern(KN.RESPONSE, 'response'), tr: this.kern(KN.TRANSPOSE, 'transpose'), rec: this.kern(rec, 'delta rule'),
       prep: this.kern(prep, 'delta prep'),
       gnorm: this.kern(KN.GATE_NORM, 'head norm and gate'), sp: this.kern(KN.SOFTPLUS, 'softplus'),
-      expand: this.kern(KN.EXPAND, 'frame expansion'),
+      expand: this.kern(KN.EXPAND_CHUNK, 'frame expansion'),
+      // The chunked forms (the acoustic blocks and the frame block; the text encoder runs in one piece and keeps the plain ones).
+      dwc: this.kern(KN.DEPTHWISE_CHUNK, 'chunk depthwise'), hist: this.kern(KN.HISTORY, 'history'), place: this.kern(KN.PLACE, 'place'),
+      scanc: this.kern(KN.SCAN_CHUNK, 'chunk energy scan'), recc: this.kern(KN.RECURRENCE_CHUNK, 'chunk delta rule'),
     };
     this.w = this.loadWeights();
     // The text encoder's features [384][n] (kept, not in the arena: the frame pass reads them) and its durations (4 rows of n; row 0 is
@@ -190,6 +206,10 @@ export class GpuAcoustic {
     this.durs = this.mk(4 * 4 * MAX_TOKENS, STORAGE);
     this.dursRead = this.mk(4 * MAX_TOKENS, READBACK);
     this.framesRead = this.mk(4 * 2 * MAX_FRAMES, READBACK);
+    // The chunk uniform { g0, f, n, 0 } (see latents-kernels.js) is written before each chunk's submission; the two readback buffers for the latents.
+    this.cu = this.mk(16, UNIFORM);
+    this.rings = [this.mk(RING, READBACK), this.mk(RING, READBACK)];
+    this.allocChunk();
     this.allocArena();
     this.ready = Promise.all([...this.kerns.values()].map(async (k) => {
       k.pipe = await device.createComputePipelineAsync({ layout: 'auto', compute: { module: device.createShaderModule({ code: k.code }), entryPoint: 'main' } });
@@ -261,14 +281,23 @@ export class GpuAcoustic {
     return { blocks, mixers, cond, out: lin('acoustic.output', LATENTS, WIDTH), text, frames };
   }
 
-  // The activations, the latents and the readback, sized for the current capacity (maxFrames), with the aliases of PER_FRAME.
-  // Every buffer goes to arenaBufs, so a growth or destroy frees the whole arena.
+  // The chunk arena (the same for every sentence, with the aliases of PER_COLUMN) and the state a chunk hands to the next, made once.
+  allocChunk() {
+    const A = (words) => this.mk(4 * words * CHUNK, STORAGE);
+    const b = Object.fromEntries(Object.entries(PER_COLUMN).map(([name, words]) => [name, A(words)]));
+    this.chunk = { ...b, H: b.D, H2: b.N, HN: b.N, GP: b.D, YT: b.QKV, GM: b.N };
+    // Per block (the six acoustic blocks and the frame block): the six columns of history of its depthwise and the running energy of its scan;
+    // per mixer: the delta-rule memory. None is initialised: a sentence's first chunk (g0 = 0) does not read them.
+    const blockState = () => ({ hist: this.mk(4 * WIDTH * HIST_COLS, STORAGE), carry: this.mk(4 * WIDTH, STORAGE) });
+    this.state = { blocks: range(BLOCKS).map(blockState), frame: blockState(),
+      mem: Object.fromEntries(MIXER_AFTER.map((i) => [i, this.mk(4 * HEADS * HEAD_DIM * HEAD_DIM, STORAGE)])) };
+  }
+
+  // The sentence's buffers, sized for the current capacity (maxFrames): the latents (which also hold the frames, see PER_FRAME), the F0 and the energy.
+  // Every buffer goes to arenaBufs, so a growth or destroy frees them all.
   allocArena() {
     const M = this.maxFrames, A = (words) => this.mk(4 * words * M, STORAGE, this.arenaBufs);
-    const b = Object.fromEntries(Object.entries(PER_FRAME).map(([name, words]) => [name, A(words)]));
-    this.buf = { ...b, FR: b.XB, HN: b.N, GP: b.H, YT: b.D, GM: b.H2, LAT: A(LATENTS) };
-    // The one readback buffer: a run made with read copies its latents here, and read() maps it. Runs are read one at a time.
-    this.readback = this.mk(readbackBytes(M), READBACK, this.arenaBufs);
+    this.buf = { ...this.chunk, LAT: A(LATENTS), F0: A(1), EN: A(1) };
   }
 
   // The capacity for a sentence of T frames: the first bucket that holds T, at most MAX_FRAMES and this device's limit.
@@ -277,8 +306,8 @@ export class GpuAcoustic {
     return Math.min(want, MAX_FRAMES, frameLimit(this.device));
   }
 
-  // Destroys the arena and the cached plans, then makes the arena for M frames in error scopes. The old arena goes first: its memory is
-  // needed for the new one. On failure no arena is left (the caller makes one again); the error has oom set when the device ran out of
+  // Destroys the sentence's buffers and the cached plans, then makes them for M frames in error scopes. The old ones go first: their memory is
+  // needed for the new one. On failure no sentence buffers are left (the caller makes them again); the error has oom set when the device ran out of
   // memory.
   async remake(M) {
     for (const p of this.plans.values()) p.uniforms.forEach((u) => u.destroy());
@@ -286,7 +315,7 @@ export class GpuAcoustic {
     this.arenaBufs.forEach((b) => b.destroy());
     this.arenaBufs = [];
     this.maxFrames = M;
-    this.framesFor = null;   // frames() left them in XB, which is one of the arena buffers destroyed here
+    this.framesFor = null;   // frames() left them in the latents buffer, which is destroyed here
     const d = this.device;
     d.pushErrorScope('validation');
     d.pushErrorScope('out-of-memory');
@@ -303,12 +332,12 @@ export class GpuAcoustic {
       this.arenaBufs.forEach((b) => b.destroy());
       this.arenaBufs = [];
       if (failure) throw failure;
-      throw Object.assign(new Error(`the acoustic arena for ${M} frames was not made (${oom ? `out of memory: ${oom.message}` : `validation: ${invalid.message}`})`),
+      throw Object.assign(new Error(`the acoustic buffers for ${M} frames were not made (${oom ? `out of memory: ${oom.message}` : `validation: ${invalid.message}`})`),
         { oom: oom !== null });
     }
   }
 
-  // Grows the arena to the bucket that holds a sentence of T frames (capacityFor), when T is more than maxFrames. The old arena goes first
+  // Grows the sentence's buffers to the bucket that holds a sentence of T frames (capacityFor), when T is more than maxFrames. The old ones go first
   // (remake). When the new one cannot be made, the old size is made again, so the acoustic pre-pass still works at the old size, and the growth throws
   // (oom: out of memory). A size that ran out of memory is remembered: a later sentence that needs it throws at once, without an allocation.
   // When even the old size cannot be made, the error is fatal (fatal = true): the acoustic pre-pass is gone and the caller stops the GPU engine.
@@ -319,7 +348,7 @@ export class GpuAcoustic {
     const want = this.capacityFor(T);
     if (T > want) throw new Error(`a sentence of ${T} frames is above the acoustic pre-pass's limit of ${want} frames`);
     if (this.failedFrames !== null && want >= this.failedFrames) {
-      throw new Error(`the acoustic arena for ${want} frames ran out of memory before; a sentence of ${T} frames runs in WebAssembly`);
+      throw new Error(`the acoustic buffers for ${want} frames ran out of memory before; a sentence of ${T} frames runs in WebAssembly`);
     }
     if (this.readPending) throw new Error('read the run in flight before the acoustic pre-pass grows');
     const old = this.maxFrames;
@@ -330,7 +359,7 @@ export class GpuAcoustic {
       try {
         await this.remake(old);
       } catch (e2) {
-        throw Object.assign(new Error(`the acoustic arena could not be made again at ${old} frames after a failed growth to ${want} (${e2.message})`),
+        throw Object.assign(new Error(`the acoustic buffers could not be made again at ${old} frames after a failed growth to ${want} (${e2.message})`),
           { fatal: true });
       }
       throw e;
@@ -356,30 +385,35 @@ export class GpuAcoustic {
     return p;
   }
 
-  plan(T) {
-    if (!Number.isInteger(T) || T < 1 || T > this.maxFrames) throw new Error(`T = ${T} is outside 1..${this.maxFrames}`);
-    return this.cached(T, () => this.buildPlan(T));
+  // The plan of a chunk of tc columns of the acoustic blocks, of a chunk of the frame pass, and of the text encoder's n tokens (the text
+  // encoder runs in one piece).
+  plan(tc) {
+    if (!Number.isInteger(tc) || tc < 1 || tc > CHUNK) throw new Error(`a chunk of ${tc} columns is outside 1..${CHUNK}`);
+    return this.cached(tc, () => this.buildPlan(tc));
   }
 
   textPlan(n) {
-    const most = Math.min(MAX_TOKENS, this.maxFrames);
-    if (!Number.isInteger(n) || n < 1 || n > most) throw new Error(`n = ${n} tokens is outside 1..${most}`);
+    if (!Number.isInteger(n) || n < 1 || n > MAX_TOKENS) throw new Error(`n = ${n} tokens is outside 1..${MAX_TOKENS}`);
     return this.cached(`text:${n}`, () => this.buildTextPlan(n));
   }
 
-  framesPlan(F) {
-    if (!Number.isInteger(F) || F < 1 || F > this.maxFrames) throw new Error(`frames: F = ${F} is outside 1..${this.maxFrames}`);
-    return this.cached(`frames:${F}`, () => this.buildFramesPlan(F));
+  framesPlan(tc) {
+    if (!Number.isInteger(tc) || tc < 1 || tc > CHUNK) throw new Error(`frames: a chunk of ${tc} columns is outside 1..${CHUNK}`);
+    return this.cached(`frames:${tc}`, () => this.buildFramesPlan(tc));
   }
 
   // The builder of a plan of T columns: p.calls (each with its uniforms and bind groups) and the steps they are made of: a Linear, a ConvNeXt
-  // block (the acoustic blocks, the text encoder's and the frame block: the same dispatches) and a mixer.
+  // block (the acoustic blocks, the text encoder's and the frame block: the same dispatches) and a mixer. A plan with state (st, mem) is a chunk
+  // of a longer sentence; its kernels take the chunk's place from the chunk uniform this.cu.
   planner(T) {
-    const B = this.buf, k = this.k, p = { T, calls: [], uniforms: [] };
+    const B = this.buf, k = this.k, p = { T, calls: [], uniforms: [] }, cu = this.cu, made = new Map();
     const uni = (...v) => {
+      const key = v.join(',');
+      if (made.has(key)) return made.get(key);
       const u = this.device.createBuffer({ size: 16, usage: UNIFORM });
       this.device.queue.writeBuffer(u, 0, new Uint32Array([...v, 0, 0, 0].slice(0, 4)));
       p.uniforms.push(u);
+      made.set(key, u);
       return u;
     };
     const disp = (kern, binds, gx, gy, label) => {
@@ -389,20 +423,28 @@ export class GpuAcoustic {
     // A Linear: out[co][t] = bias[co] + sum_ci W[co][ci] in[ci][t] (+ res[co][t]).
     const linear = (l, src, dst, res, label) => disp(l.kern, { 0: uni(T, l.cin, l.cout, T), 1: src, 2: l.w, 3: dst, 4: l.bias, 5: res },
       Math.ceil(T / CONV_L), Math.ceil(l.cout / CONV_CO), label);
-    // A ConvNeXt block from cur into dst = down(...) + cur. after: the depthwise's columns past each t (0 for the causal acoustic block).
-    const block = (blk, cur, dst, after, name) => {
+    // A ConvNeXt block from cur into dst = down(...) + cur. after: the depthwise's columns past each t (0 for the causal acoustic block). st: the
+    // block's state when it runs in chunks (its depthwise reads the history, and the history is saved for the next chunk once the depthwise has read cur).
+    const block = (blk, cur, dst, after, name, st = null) => {
       const W = WIDTH * T;
-      disp(k.dw, { 0: uni(T, after), 1: cur, 2: blk.dw, 3: blk.dwB, 4: B.D }, Math.ceil(T / 64), WIDTH, `${name} depthwise`);
+      if (st) {
+        disp(k.dwc, { 0: uni(T), 1: cur, 2: blk.dw, 3: blk.dwB, 4: B.D, 5: st.hist, 6: cu }, Math.ceil(T / 64), WIDTH, `${name} depthwise`);
+        disp(k.hist, { 0: uni(T), 1: cur, 2: st.hist }, Math.ceil((WIDTH * HIST_COLS) / 64), 1, `${name} history`);
+      } else {
+        disp(k.dw, { 0: uni(T, after), 1: cur, 2: blk.dw, 3: blk.dwB, 4: B.D }, Math.ceil(T / 64), WIDTH, `${name} depthwise`);
+      }
       disp(k.ln, { 0: uni(T), 1: B.D, 2: blk.lnW, 3: blk.lnB, 4: B.N }, Math.ceil(T / 64), 1, `${name} norm`);
       linear(blk.up, B.N, B.H, null, `${name} up`);
       disp(k.gelu, { 0: uni(W), 1: B.H }, Math.ceil(W / 256), 1, `${name} gelu`);
-      disp(k.scan, { 0: uni(T), 1: B.H, 2: B.CUM }, WIDTH, 1, `${name} energy`);
+      if (st) disp(k.scanc, { 0: uni(T), 1: B.H, 2: B.CUM, 3: st.carry, 4: cu }, WIDTH, 1, `${name} energy`);
+      else disp(k.scan, { 0: uni(T), 1: B.H, 2: B.CUM }, WIDTH, 1, `${name} energy`);
       disp(k.scale, { 0: uni(T), 1: B.CUM, 2: B.SC }, Math.ceil(T / 64), 1, `${name} scale`);
       disp(k.resp, { 0: uni(T, W), 1: B.H, 2: B.CUM, 3: B.SC, 4: blk.gamma, 5: blk.beta, 6: B.H2 }, Math.ceil(W / 256), 1, `${name} response`);
       linear(blk.down, B.H2, dst, cur, `${name} down + residual`);
     };
     // The mixer: its inputs are read by earlier dispatches than the buffers they share with (HN = N is written after the block's up
-    // projection has read N; GP = H, YT = D and GM = H2 are free; GM is read only by the output Linear, after GP and YT are read).
+    // projection has read N; GP = D is free; YT = QKV is written after the transposes have read QKV; GM = N is written after the gate Linear has read HN, and is
+    // read only by the output Linear). Its recurrence starts from the memory the last chunk left.
     const mixer = (i, X, OUT) => {
       const m = this.w.mixers[i], name = `mixer ${i}`;
       disp(k.ln, { 0: uni(T), 1: X, 2: m.lnW, 3: m.lnB, 4: B.HN }, Math.ceil(T / 64), 1, `${name} norm`);
@@ -412,23 +454,27 @@ export class GpuAcoustic {
       disp(k.tr, { 0: uni(T, FEATURES), 1: B.QKV, 2: B.QKVT }, Math.ceil(T / 32), Math.ceil(FEATURES / 32), `${name} transpose qkv`);
       disp(k.tr, { 0: uni(T, DECAY), 1: B.G, 2: B.GT }, Math.ceil(T / 32), Math.ceil(DECAY / 32), `${name} transpose gates`);
       disp(k.prep, { 0: uni(T), 1: B.QKVT, 2: B.GT, 3: B.CUM }, Math.ceil(T / 64), HEADS, `${name} delta prep`);
-      disp(k.rec, { 0: uni(T), 1: B.QKVT, 2: B.GT, 3: B.YT, 4: B.CUM }, HEADS, 1, `${name} delta rule`);
+      disp(k.recc, { 0: uni(T), 1: B.QKVT, 2: B.GT, 3: B.YT, 4: B.CUM, 5: this.state.mem[i], 6: cu }, HEADS, 1, `${name} delta rule`);
       disp(k.gnorm, { 0: uni(T), 1: B.YT, 2: B.GP, 3: m.outNW, 4: m.outNB, 5: B.GM }, Math.ceil(T / 64), HEADS, `${name} head norm and gate`);
       linear(m.out, B.GM, OUT, X, `${name} out + residual`);
     };
-    return { p, disp, uni, linear, block, mixer };
+    // The chunk's columns [r][T] into the sentence's rows [r][f] at the chunk's place.
+    const place = (src, dst, rows, label) => disp(k.place, { 0: uni(T), 1: src, 2: dst, 3: cu }, Math.ceil(T / 64), rows, label);
+    return { p, disp, uni, linear, block, mixer, place };
   }
 
+  // A chunk of the acoustic blocks: the condition reads its columns of the frames (the first 384 rows of the latents buffer), the blocks and mixers run
+  // with their state, and the output Linear's rows (in QKV) are placed in the latents buffer, over the frames' columns that the condition has read.
   buildPlan(T) {
-    const { p, disp, uni, linear, block, mixer } = this.planner(T);
-    const B = this.buf;
+    const { p, disp, uni, linear, block, mixer, place } = this.planner(T);
+    const B = this.buf, st = this.state;
     // The condition: x = (bias + w0 f0 + w1 energy) + frames; then the blocks, with the mixers after blocks 1 and 4.
-    disp(this.k.cond, { 0: uni(T), 1: B.FR, 2: B.F0, 3: B.EN, 4: this.w.cond.cw, 5: this.w.cond.cb, 6: B.XA }, Math.ceil(T / 64), WIDTH, 'condition');
+    disp(this.k.cond, { 0: uni(T), 1: B.LAT, 2: B.F0, 3: B.EN, 4: this.w.cond.cw, 5: this.w.cond.cb, 6: B.XA, 7: this.cu }, Math.ceil(T / 64), WIDTH, 'condition');
     let cur = B.XA;
     const other = (x) => (x === B.XA ? B.XB : B.XA);
     for (let i = 0; i < BLOCKS; i++) {
       const nxt = other(cur);
-      block(this.w.blocks[i], cur, nxt, 0, `block ${i}`);
+      block(this.w.blocks[i], cur, nxt, 0, `block ${i}`, st.blocks[i]);
       cur = nxt;
       if (MIXER_AFTER.includes(i)) {
         const out = other(cur);
@@ -436,7 +482,8 @@ export class GpuAcoustic {
         cur = out;
       }
     }
-    linear(this.w.out, cur, B.LAT, null, 'output');
+    linear(this.w.out, cur, B.QKV, null, 'output');
+    place(B.QKV, B.LAT, LATENTS, 'latents');
     return p;
   }
 
@@ -456,19 +503,19 @@ export class GpuAcoustic {
     return p;
   }
 
-  // The frame pass's plan for F frames: the expansion (XA), the frame block (XA -> XB; the frames are XB, where run(null, ...) reads them), the
-  // prosody Linear (XB -> QKV, rows 0 and 1 of F) and the softplus of row 0 in place. Aliases, each safe because the pass reads an input before
-  // anything writes it: the expansion's token index and phase are read from F0 and EN, which run() fills only after this pass (frames() writes
-  // them just before); the prosody output goes to QKV, which the mixers write only inside run(), after the frames have been taken. The
-  // expansion's uniform holds n (the features' stride), rewritten by frames() before each pass; the plan itself depends on F alone.
-  buildFramesPlan(F) {
-    const { p, disp, uni, linear, block } = this.planner(F);
+  // A chunk of the frame pass: the expansion (XA) of the chunk's frames, the frame block (XA -> XB, with its state) placed into the first 384 rows of the
+  // latents buffer (where run(null, ...) reads them), the prosody Linear (XB -> QKV, rows 0 and 1 of the chunk) and the softplus of row 0 in place.
+  // Aliases, each safe because the pass reads an input before anything writes it: the expansion's token index and phase are read from F0 and EN, which
+  // run() fills only after this pass (frames() writes them just before); the prosody output goes to QKV, which the mixers write only inside run().
+  // The plan depends on the chunk's length alone; the expansion reads the features' stride n from the chunk uniform.
+  buildFramesPlan(T) {
+    const { p, disp, uni, linear, block, place } = this.planner(T);
     const B = this.buf, fr = this.w.frames;
-    p.nUni = uni(F, 0);
-    disp(this.k.expand, { 0: p.nUni, 1: this.feats, 2: B.F0, 3: B.EN, 4: fr.pw, 5: fr.pb, 6: B.XA }, Math.ceil(F / 64), WIDTH, 'frame expansion');
-    block(fr.block, B.XA, B.XB, 0, 'frame block');
+    disp(this.k.expand, { 0: uni(T), 1: this.feats, 2: B.F0, 3: B.EN, 4: fr.pw, 5: fr.pb, 6: B.XA, 7: this.cu }, Math.ceil(T / 64), WIDTH, 'frame expansion');
+    block(fr.block, B.XA, B.XB, 0, 'frame block', this.state.frame);
+    place(B.XB, B.LAT, WIDTH, 'frames');
     linear(fr.prosody, B.XB, B.QKV, null, 'prosody');
-    disp(this.k.sp, { 0: uni(F), 1: B.QKV }, Math.ceil(F / 256), 1, 'softplus f0');
+    disp(this.k.sp, { 0: uni(T), 1: B.QKV }, Math.ceil(T / 256), 1, 'softplus f0');
     return p;
   }
 
@@ -489,36 +536,47 @@ export class GpuAcoustic {
     }
   }
 
-  // One push of a whole sentence: frames [384][T], f0 [T], energy [T] (Float32Arrays), written and submitted in one compute pass.
-  // Returns { T, latents } where latents is the [512][T] buffer (stride T) that the next run overwrites. With read, the latents are also copied to the readback buffer, and read() maps it: a run made with read must be read before the next
-  // one is made with read. frames = null: the frames are the ones frames(T) left in XB (the frame pass, no copy). That needs no other pass
-  // since: a text pass or a run overwrites XB, and clears framesFor, which this checks.
+  // One push of a whole sentence: frames [384][T], f0 [T], energy [T] (Float32Arrays), written and then run in chunks of CHUNK columns, one submission each.
+  // Returns { T, latents } where latents is the [512][T] buffer (stride T) that the next frame pass or run overwrites. With read, the latents are also copied to the
+  // readback buffers, and read() maps them in groups: a run made with read must be read before the next one is made with read. frames = null: the frames are
+  // the ones frames(T) left in the latents buffer (the frame pass, no copy). That needs no other pass since: a text pass or a run overwrites them,
+  // and clears framesFor, which this checks.
   run(frames, f0, energy, { read = false } = {}) {
     const T = f0.length, d = this.device;
-    if (energy.length !== T || (frames !== null && frames.length !== WIDTH * T)) {
-      throw new Error(`bad inputs for ${T} frames: frames ${frames === null ? 'in XB' : frames.length}, energy ${energy.length}`);
+    if (energy.length !== T || (frames !== null && frames.length !== WIDTH * T) || T > this.maxFrames) {
+      throw new Error(`bad inputs for ${T} frames (capacity ${this.maxFrames}): frames ${frames === null ? 'in the latents buffer' : frames.length}, energy ${energy.length}`);
     }
-    if (frames === null && this.framesFor !== T) throw new Error(`run(null): XB holds the frames of frames(${this.framesFor}), not of ${T}`);
+    if (frames === null && this.framesFor !== T) throw new Error(`run(null): the latents buffer holds the frames of frames(${this.framesFor}), not of ${T}`);
     if (read && this.readPending) throw new Error('read the run in flight before another run is made with read');
-    const p = this.plan(T);
-    if (frames !== null) d.queue.writeBuffer(this.buf.FR, 0, frames);
+    if (frames !== null) d.queue.writeBuffer(this.buf.LAT, 0, frames);
     d.queue.writeBuffer(this.buf.F0, 0, f0);
     d.queue.writeBuffer(this.buf.EN, 0, energy);
-    this.framesFor = null;   // the run's first dispatch reads FR (XB), and its blocks then overwrite XB
-    const enc = d.createCommandEncoder();
-    this.runPass(enc, p.calls);
+    this.framesFor = null;   // the first chunk's condition reads the frames, and the chunks' outputs then overwrite them
     const out = { T, latents: this.buf.LAT, readBytes: 0 };
-    if (read) {
-      // The layout of the readback: the latents [512][T].
-      enc.copyBufferToBuffer(this.buf.LAT, 0, this.readback, 0, 4 * LATENTS * T);
-      out.readBytes = 4 * LATENTS * T;
-      this.readPending = true;
+    for (let g0 = 0; g0 < T; g0 += CHUNK) {
+      const tc = Math.min(CHUNK, T - g0), p = this.plan(tc), last = g0 + tc === T;
+      d.queue.writeBuffer(this.cu, 0, new Uint32Array([g0, T, 0, 0]));
+      const enc = d.createCommandEncoder();
+      this.runPass(enc, p.calls);
+      if (last && read) {
+        // The layout of the readback: the latents [512][T], in groups of RING bytes; the first two groups go to the readback buffers now.
+        out.readBytes = 4 * LATENTS * T;
+        for (let k = 0; k < Math.min(2, this.groups(out.readBytes)); k++) this.copyGroup(enc, out.readBytes, k);
+        this.readPending = true;
+      }
+      d.queue.submit([enc.finish()]);
     }
-    d.queue.submit([enc.finish()]);
     return out;
   }
 
-  // The text encoder for a sentence of n tokens (n <= 512): x0 [384][n] (textInput) goes to the arena's XA, the D text blocks and the duration
+  // The groups of RING bytes that `bytes` of latents are read back in, the size of group k, and the copy of group k to its readback buffer.
+  groups(bytes) { return Math.ceil(bytes / RING); }
+
+  groupBytes(bytes, k) { return Math.min(RING, bytes - k * RING); }
+
+  copyGroup(enc, bytes, k) { enc.copyBufferToBuffer(this.buf.LAT, k * RING, this.rings[k & 1], 0, this.groupBytes(bytes, k)); }
+
+  // The text encoder for a sentence of n tokens (n <= 512): x0 [384][n] (textInput) goes to the chunk arena's XA, the D text blocks and the duration
   // head run in one compute pass, and the features [384][n] stay in this.feats for the frame pass. Resolves to the durations (40 Hz units,
   // before the rounding), a Float32Array(n). A second call before this one resolves throws.
   async encode(x0, n) {
@@ -533,7 +591,7 @@ export class GpuAcoustic {
       enc.copyBufferToBuffer(this.durs, 0, this.dursRead, 0, 4 * n);
       d.queue.submit([enc.finish()]);
       this.textFor = n;
-      this.framesFor = null;   // the text blocks overwrite XB
+      this.framesFor = null;   // a new text pass is a new sentence: its frame pass comes next
       return await this.mapFloats(this.dursRead, 4 * n);
     } finally {
       this.textPending = false;
@@ -542,16 +600,16 @@ export class GpuAcoustic {
 
   // The frame pass from the last encode's features: counts40 (Uint32Array of the n tokens' 40 Hz counts, after the
   // rounding) and F = 2 sum(counts40). Each token gives 2 counts40 frames with phase i / count; the expansion, the frame block and the prosody
-  // run in one pass. Resolves to the raw F0 (after the softplus) and energy, Float32Array(F) each, before the worker's plan (zt_gpu_plan). The frames stay in
-  // XB for run(null, ...). A second call before this one resolves throws.
+  // run in chunks of CHUNK columns (one submission each). Resolves to the raw F0 (after the softplus) and energy, Float32Array(F) each, before the worker's plan (zt_gpu_plan). The frames stay in
+  // the latents buffer for run(null, ...). A second call before this one resolves throws.
   async frames(counts40, F) {
     const n = counts40.length, d = this.device;
     if (this.textFor !== n) throw new Error(`frames: the features are for ${this.textFor} tokens (the last encode), not ${n}`);
     let total = 0;
     for (let t = 0; t < n; t++) total += 2 * counts40[t];
     if (total !== F) throw new Error(`frames: the counts make ${total} frames, not ${F}`);
+    if (F > this.maxFrames) throw new Error(`frames: F = ${F} is outside 1..${this.maxFrames}`);
     if (this.framesPending) throw new Error('frames: the last frame pass is not read yet (await its frames first)');
-    const p = this.framesPlan(F);
     this.framesPending = true;
     try {
       const tok = new Uint32Array(F), phase = new Float32Array(F);
@@ -561,11 +619,17 @@ export class GpuAcoustic {
       }
       d.queue.writeBuffer(this.buf.F0, 0, tok);
       d.queue.writeBuffer(this.buf.EN, 0, phase);
-      d.queue.writeBuffer(p.nUni, 0, new Uint32Array([F, n, 0, 0]));
-      const enc = d.createCommandEncoder();
-      this.runPass(enc, p.calls, null);
-      enc.copyBufferToBuffer(this.buf.QKV, 0, this.framesRead, 0, 8 * F);
-      d.queue.submit([enc.finish()]);
+      this.framesFor = null;
+      for (let g0 = 0; g0 < F; g0 += CHUNK) {
+        const tc = Math.min(CHUNK, F - g0), p = this.framesPlan(tc);
+        d.queue.writeBuffer(this.cu, 0, new Uint32Array([g0, F, n, 0]));
+        const enc = d.createCommandEncoder();
+        this.runPass(enc, p.calls);
+        // Rows 0 and 1 of the chunk's prosody output (F0, energy) to the same rows of the F columns read back.
+        enc.copyBufferToBuffer(this.buf.QKV, 0, this.framesRead, 4 * g0, 4 * tc);
+        enc.copyBufferToBuffer(this.buf.QKV, 4 * tc, this.framesRead, 4 * (F + g0), 4 * tc);
+        d.queue.submit([enc.finish()]);
+      }
       this.framesFor = F;
       const all = await this.mapFloats(this.framesRead, 8 * F);
       return { f0: all.subarray(0, F), energy: all.subarray(F, 2 * F) };
@@ -574,28 +638,45 @@ export class GpuAcoustic {
     }
   }
 
-  // The latents [512][T] of a run made with read: true. The readback buffer is
-  // freed for the next run (nothing is freed per run).
+  // The latents [512][T] of a run made with read: true, read in groups of RING bytes through the two readback buffers: the first two groups were copied
+  // by the run, and both are mapped at once; as each group is read out, the group two after it is copied into its buffer and mapped, while the next group
+  // is read. The buffers are free for the next run once this has resolved.
   async read(out) {
     if (!out.readBytes) throw new Error('the run was not made with { read: true }, or was read already');
-    const n = out.readBytes, rb = this.readback, T = out.T;
-    let mapped = false, all = null;
+    const bytes = out.readBytes, T = out.T, n = this.groups(bytes), all = new Float32Array(LATENTS * T);
+    const maps = [null, null];
+    const map = (k) => {
+      const p = this.rings[k & 1].mapAsync(GPUMapMode.READ, 0, this.groupBytes(bytes, k));
+      p.catch(() => {});   // a failure is thrown where the group is awaited; a group never awaited must not be an unhandled rejection
+      maps[k & 1] = p;
+    };
     try {
-      await rb.mapAsync(GPUMapMode.READ, 0, n);
-      mapped = true;
-      all = new Float32Array(rb.getMappedRange(0, n).slice(0));
+      map(0);
+      if (n > 1) map(1);
+      for (let k = 0; k < n; k++) {
+        const rb = this.rings[k & 1], size = this.groupBytes(bytes, k);
+        await maps[k & 1];
+        all.set(new Float32Array(rb.getMappedRange(0, size)), (k * RING) / 4);
+        rb.unmap();
+        if (k + 2 < n) {
+          const enc = this.device.createCommandEncoder();
+          this.copyGroup(enc, bytes, k + 2);
+          this.device.queue.submit([enc.finish()]);
+          map(k + 2);
+        }
+      }
     } finally {
-      if (mapped) rb.unmap();
+      for (const rb of this.rings) { try { rb.unmap(); } catch { /* not mapped */ } }
       this.readPending = false;
       out.readBytes = 0;
     }
-    return { latents: all.subarray(0, LATENTS * T) };
+    return { latents: all };
   }
 
-  // The bytes of the current arena and of its readback buffer (the worker's replies report them).
+  // The bytes of the chunk arena, of the sentence's buffers at the current capacity, of the state and of the readback buffers (the worker's replies report them).
   memory() {
-    return { frames: this.maxFrames, weights: this.weightBytes, arena: arenaBytes(this.maxFrames),
-      readback: readbackBytes(this.maxFrames) };
+    return { frames: this.maxFrames, weights: this.weightBytes, arena: chunkBytes, state: STATE_BYTES, sentence: sentenceBytes(this.maxFrames),
+      readback: readbackBytes() };
   }
 
   destroy() {

@@ -16,7 +16,7 @@ const ENGINES = ['auto', 'wasm', 'gpu'];
 // The adaptation's threshold (verdict): a request whose median window time over its core's audio is above SLOW (0.25, four times real
 // time) is slow, and two slow requests in a row move the next request to the 120-frame core.
 const SLOW = 0.25;
-const ACOUSTIC_FRAMES = 600; // the acoustic pre-pass's arena at the start (latents.js's first bucket); a longer sentence grows it
+const ACOUSTIC_FRAMES = 600; // the capacity of the acoustic pre-pass's sentence buffers (latents, F0, energy) at the start (latents.js's first bucket); a longer sentence grows them
 
 // The GPU modules are imported statically (not on demand) so bundlers can pack this worker as one file with their default
 // settings; they only define code, and the WebGPU calls happen in startGpu.
@@ -140,7 +140,7 @@ function stopGpu(reason) {
   gpuDevice = null;
 }
 
-// The acoustic pre-pass (webgpu/latents.js) on the device: the model's student part, its weights and an arena for ACOUSTIC_FRAMES frames, made in error
+// The acoustic pre-pass (webgpu/latents.js) on the device: the model's student part, its weights, its chunk arena and sentence buffers for ACOUSTIC_FRAMES frames, made in error
 // scopes like the generator's. Throws with the reason when it is not made.
 async function makeAcoustic(device, model) {
   device.pushErrorScope('validation');
@@ -375,7 +375,7 @@ async function gpuSpeak(text, format, send) {
 
   // Sentence i's front half on the GPU : zt_gpu_prepare (the token ids and the coordinates), the text
   // encoder on the GPU (acoustic.encode: the durations), zt_gpu_counts (the 40 Hz counts, the frames and the trim), the arena grown, the frame
-  // pass on the GPU (acoustic.frames: the raw F0 and energy) and zt_gpu_plan. Its frames stay in the acoustic pre-pass's XB (frames null). Null when the
+  // pass on the GPU (acoustic.frames: the raw F0 and energy) and zt_gpu_plan. Its frames stay in the acoustic pre-pass's latents buffer (frames null). Null when the
   // acoustic pre-pass does not take the sentence. A failed step throws (acousticFront falls back for the sentence); the text's own error is a frontError.
   const frontOnGpu = async (i, tm) => {
     const tg = performance.now();
@@ -426,7 +426,7 @@ async function gpuSpeak(text, format, send) {
     await grow(i, F, tm);
     return front;
   };
-  // The acoustic pre-pass's arena holds F frames (acoustic.ensureCapacity, a no-op once it does); its time is growMs. A failure is tagged capacity: it is
+  // The acoustic pre-pass's sentence buffers hold F frames (acoustic.ensureCapacity, a no-op once they do); its time is growMs. A failure is tagged capacity: it is
   // not a GPU front's failure (acousticFront rethrows it), so the sentence gets one attempt, as it did before the GPU front existed.
   const grow = async (i, F, tm) => {
     const tg = performance.now();
