@@ -29,6 +29,8 @@ embed = ["dep:zero-talk-model-11m"]
 # default there and about 3-4x faster. The command's --backend portable selects the pure Rust one. The two give results that differ
 # slightly, by floating-point rounding.
 accelerate = []
+# Makes the engine's modules public, for crates/zero-talk-wasm (the WebAssembly build of the npm package). Not part of the API.
+internals = []
 
 [dependencies]
 # Pure Rust matrix products with runtime-detected AVX2/FMA, AVX-512 and NEON kernels.

@@ -1,0 +1,16 @@
+[package]
+name = "zero-talk-wasm"
+description = "The WebAssembly build of the zero-talk engine: js/dist/engine.wasm, built by build.sh"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+zero-talk = { path = "../zero-talk", default-features = false, features = ["internals"] }

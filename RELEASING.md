@@ -48,8 +48,11 @@ reaches an archive or a binary.
    crate dependency versions, lockfiles and version assertions where needed.
    Ensure the two Rust crates permit publication and the npm repository metadata
    matches the public repository.
-2. Review the changes and pass CI. It includes crate packaging and an npm pack dry
-   run. Commit the reviewed changes.
+2. Review the changes and pass CI. It includes crate packaging, an npm pack dry
+   run and a rebuild of `js/dist/engine.wasm` from the sources with the pinned toolchain,
+   which must give the file and the size and sha256 in `model.json`. The same file
+   goes to `https://labzero.ai/zero-talk-11m/engine.wasm` (the website serves what
+   `model.json` lists). Commit the reviewed changes.
 3. Create `vVERSION` on that commit and push the tag.
    For version 1.0.0, the tag is `v1.0.0`. Never move a released tag.
 4. Review the release build results and approve the three `release` environment

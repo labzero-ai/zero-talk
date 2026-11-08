@@ -22,25 +22,24 @@
 //! Start with [`Voice`]. The text is English: plain sentences, with numbers, dates and prices written as digits read out in words.
 #![warn(missing_docs)]
 
-mod archive;
-mod audio;
-mod conditioner;
-mod error;
-mod generator;
-mod kernels;
-mod marker;
-mod opus;
-mod pipeline;
-mod plan;
+// With the `internals` feature the engine's modules are public, for the WebAssembly build (crates/zero-talk-wasm), which drives the
+// stages of the pipeline itself. They are not part of the crate's API.
+macro_rules! modules {
+    ($($name:ident),* $(,)?) => {
+        $(
+            #[cfg(feature = "internals")]
+            #[doc(hidden)]
+            #[allow(missing_docs)]
+            pub mod $name;
+            #[cfg(not(feature = "internals"))]
+            mod $name;
+        )*
+    };
+}
+
+modules!(archive, audio, conditioner, error, generator, kernels, marker, opus, pipeline, plan, post, source, speak, stream, student, text, voice, wav);
+
 mod play;
-mod post;
-mod source;
-mod speak;
-mod stream;
-mod student;
-mod text;
-mod voice;
-mod wav;
 
 #[doc(hidden)]
 pub mod cli;

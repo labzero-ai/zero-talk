@@ -44,6 +44,22 @@ jobs:
             echo "::notice title=out$i.wav sha256::$(sha256sum "out$i.wav" | cut -d' ' -f1)"
           done
 
+  wasm:
+    name: engine.wasm is what the sources build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+      - name: Install the toolchain that build.sh pins
+        run: |
+          toolchain=$(sed -n 's/^TOOLCHAIN=//p' rust/crates/zero-talk-wasm/build.sh)
+          rustup toolchain install "$toolchain" --profile minimal --target wasm32-unknown-unknown
+      - name: Rebuild js/dist/engine.wasm and compare it with the file, model.json and files.json
+        run: rust/crates/zero-talk-wasm/build.sh --check
+
   python:
     name: python ${{ matrix.python }} (${{ matrix.os }})
     strategy:

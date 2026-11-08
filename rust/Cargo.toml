@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/zero-talk", "crates/zero-talk-model-11m"]
+members = ["crates/zero-talk", "crates/zero-talk-model-11m", "crates/zero-talk-wasm"]
 
 [workspace.package]
 version = "1.0.0"

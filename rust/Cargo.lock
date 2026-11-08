@@ -42,3 +42,10 @@ dependencies = [
 [[package]]
 name = "zero-talk-model-11m"
 version = "1.0.0"
+
+[[package]]
+name = "zero-talk-wasm"
+version = "1.0.0"
+dependencies = [
+ "zero-talk",
+]
