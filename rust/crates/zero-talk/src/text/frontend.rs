@@ -22,6 +22,43 @@ pub struct Plan {
     pub chunks: Vec<Chunk>,
     /// Words that got no phonemes and are left out of the speech, in order of first appearance.
     pub unread: Vec<String>,
+    /// Steering tags (`[M2]`, `[breathy:1]`) that were removed from the text, in order. The open model has no steering.
+    pub tags: Vec<String>,
+}
+
+/// Removes mode and cue tags, `[M0]`...`[M9]` and `[word:number]` such as `[breathy:1]`. This model has no steering, so they
+/// must not be read aloud. A link label `[label](target)` is not a tag. Returns the text and the tags removed.
+pub fn strip_tags(text: &str) -> (String, Vec<String>) {
+    let t: Vec<char> = text.chars().collect();
+    let (mut out, mut tags) = (String::new(), Vec::new());
+    let mut i = 0;
+    while i < t.len() {
+        if t[i] == '[' {
+            if let Some(close) = (i + 1..t.len()).find(|&k| t[k] == ']') {
+                let body: String = t[i + 1..close].iter().collect();
+                if is_tag(&body) {
+                    tags.push(format!("[{body}]"));
+                    i = close + 1;
+                    // "a [M2] b" loses the tag and one of the two spaces around it.
+                    if t.get(i) == Some(&' ') && (out.is_empty() || out.ends_with(char::is_whitespace)) {
+                        i += 1;
+                    }
+                    continue;
+                }
+            }
+        }
+        out.push(t[i]);
+        i += 1;
+    }
+    (out, tags)
+}
+
+fn is_tag(body: &str) -> bool {
+    let mode = body.len() >= 2 && body.starts_with(['M', 'm']) && body[1..].chars().all(|c| c.is_ascii_digit());
+    let cue = body.split_once(':').is_some_and(|(name, value)| {
+        !name.is_empty() && name.chars().all(|c| c.is_ascii_alphabetic() || c == '_') && !value.is_empty() && value.chars().all(|c| c.is_ascii_digit() || c == '.')
+    });
+    mode || cue
 }
 
 /// spaCy-style tokens: (text, tag, trailing whitespace).
@@ -102,8 +139,9 @@ impl Frontend {
     /// got no phonemes (a letter outside a-z, mostly) and so are left out.
     pub fn plan_with(&self, text: &str, analyze: &mut dyn FnMut(&str) -> Spacy) -> Plan {
         let lex = self.lexicon();
-        let mut plan = Plan { chunks: Vec::new(), unread: Vec::new() };
-        for segment in strip(text).split('\n').filter(|s| !strip(s).is_empty()) {
+        let (text, tags) = strip_tags(text);
+        let mut plan = Plan { chunks: Vec::new(), unread: Vec::new(), tags };
+        for segment in strip(&text).split('\n').filter(|s| !strip(s).is_empty()) {
             let normalized = super::normalize::normalize(segment);
             let tokens = self.segment_tokens(&lex, &normalized, analyze);
             for t in &tokens {
@@ -118,5 +156,30 @@ impl Frontend {
 
     pub fn plan(&self, text: &str) -> Plan {
         self.plan_with(text, &mut |t| self.analyze(t))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_tags;
+
+    fn s(t: &str) -> (String, Vec<String>) {
+        strip_tags(t)
+    }
+
+    #[test]
+    fn mode_and_cue_tags_are_removed_and_named() {
+        assert_eq!(s("[M2] Hi."), ("Hi.".to_string(), vec!["[M2]".to_string()]));
+        assert_eq!(s("[breathy:1] Hi."), ("Hi.".to_string(), vec!["[breathy:1]".to_string()]));
+        assert_eq!(s("Hi [M0] there."), ("Hi there.".to_string(), vec!["[M0]".to_string()]));
+        assert_eq!(s("a[M4]b").0, "ab");
+        assert_eq!(s("[M1] one. [M3] two.").1.len(), 2);
+    }
+
+    #[test]
+    fn other_brackets_are_left_alone() {
+        for t in ["No tags here.", "See [the docs](http://x.io) now.", "An [aside] here.", "Array [1] and [a:b].", "[M] alone", "Open [bracket"] {
+            assert_eq!(s(t), (t.to_string(), vec![]), "{t}");
+        }
     }
 }

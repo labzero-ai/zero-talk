@@ -543,7 +543,7 @@ fn capitalised(s: &str) -> String {
 // ------------------------------------------------------------------------------------------------------ dates
 
 fn iso_date(t: &Text, i: usize) -> Option<(usize, String)> {
-    if t.digits(i) != 4 || t.at(i + 4) != '-' || t.digits(i + 5) != 2 || t.at(i + 7) != '-' || t.digits(i + 8) != 2 || !t.ends(i + 10) {
+    if t.digits(i) != 4 || !matches!(t.at(i + 4), '-' | '/') || t.at(i + 7) != t.at(i + 4) || t.digits(i + 5) != 2 || t.digits(i + 8) != 2 || !t.ends(i + 10) {
         return None;
     }
     let (y, m, d) = (t.num_at(i, 4)?, t.num_at(i + 5, 2)?, t.num_at(i + 8, 2)?);
@@ -553,15 +553,17 @@ fn iso_date(t: &Text, i: usize) -> Option<(usize, String)> {
     Some((10, format!("{} {} {}", month_name(m), ordinal_spoken(d), year_words(y))))
 }
 
-/// Numeric dates that only one reading allows: a field above 12 is the day.
+/// Numeric dates with a four-digit year last, "12/25/1990" or "12-25-1990": a field above 12 is the day, so one reading is
+/// forced; when both fields are 12 or less ("1/2/2026") the American order month-day is taken, like the engine's American voice.
 fn numeric_date(t: &Text, i: usize) -> Option<(usize, String)> {
     let a = t.digits(i);
-    if !(1..=2).contains(&a) || t.at(i + a) != '/' {
+    let sep = t.at(i + a);
+    if !(1..=2).contains(&a) || !matches!(sep, '/' | '-') {
         return None;
     }
     let b_start = i + a + 1;
     let b = t.digits(b_start);
-    if !(1..=2).contains(&b) || t.at(b_start + b) != '/' {
+    if !(1..=2).contains(&b) || t.at(b_start + b) != sep {
         return None;
     }
     let y_start = b_start + b + 1;
@@ -569,7 +571,7 @@ fn numeric_date(t: &Text, i: usize) -> Option<(usize, String)> {
         return None;
     }
     let (x, y, year) = (t.num_at(i, a)?, t.num_at(b_start, b)?, t.num_at(y_start, 4)?);
-    let text = if (1..=12).contains(&x) && (13..=31).contains(&y) {
+    let text = if (1..=12).contains(&x) && (1..=31).contains(&y) {
         format!("{} {} {}", month_name(x), ordinal_spoken(y), year_words(year))
     } else if (13..=31).contains(&x) && (1..=12).contains(&y) {
         format!("the {} of {} {}", ordinal_spoken(x), month_name(y), year_words(year))
@@ -1189,7 +1191,7 @@ mod tests {
     fn dates_are_read_as_written_dates() {
         assert_eq!(r("We meet on 2026-11-05 at the lab."), "We meet on November 5th twenty twenty-six at the lab.");
         assert_eq!(r("Pay by 03/14/2027."), "Pay by March 14th twenty twenty-seven.");
-        assert_eq!(r("The deadline is 11/05/2026."), "The deadline is 11/05/2026.");
+        assert_eq!(r("The deadline is 11/05/2026."), "The deadline is November 5th twenty twenty-six.");
         assert_eq!(r("The date is 5 Nov 2026."), "The date is the 5th of November twenty twenty-six.");
         assert_eq!(r("Ship it on Dec. 25 at the latest."), "Ship it on Dec. twenty-fifth at the latest.");
         assert_eq!(r("The party was on December 25, 2026."), "The party was on December 25, 2026.");
@@ -1217,11 +1219,24 @@ mod tests {
     }
 
     #[test]
+    fn numeric_dates_have_one_reading() {
+        // A field above 12 forces day-first; ambiguous ones take the American month-first order.
+        assert_eq!(r("On 12/25/1990 it snowed."), "On December twenty-fifth nineteen ninety it snowed.");
+        assert_eq!(r("On 25/12/1990 it snowed."), "On the twenty-fifth of December nineteen ninety it snowed.");
+        assert_eq!(r("On 12-25-1990 it snowed."), "On December twenty-fifth nineteen ninety it snowed.");
+        assert_eq!(r("On 2026/03/04 it snowed."), "On March 4th twenty twenty-six it snowed.");
+        assert_eq!(r("On 2026-03-04 it snowed."), "On March 4th twenty twenty-six it snowed.");
+        // Not dates: a month above 12 in both fields, a two-digit year, a range.
+        assert_eq!(r("Rows 20/25/1990."), "Rows 20/25/1990.");
+        assert_eq!(r("Pages 5-10."), "Pages 5 to 10.");
+    }
+
+    #[test]
     fn fractions_roman_numerals_and_multiplication() {
         assert_eq!(r("Add 1/2 cup of milk."), "Add one half cup of milk.");
         assert_eq!(r("Take 2/3 of the total."), "Take two thirds of the total.");
         assert_eq!(r("Pour ½ cup of oil."), "Pour one half cup of oil.");
-        assert_eq!(r("The 1/2/2026 form."), "The 1/2/2026 form.");
+        assert_eq!(r("The 1/2/2026 form."), "The January 2nd twenty twenty-six form.");
         assert_eq!(r("The 9/11 attacks changed things."), "The 9/11 attacks changed things.");
         assert_eq!(r("It costs €18.75 today."), "It costs €18.75 today.");
         assert_eq!(r("It costs €20 today."), "It costs 20 euros today.");

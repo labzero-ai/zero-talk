@@ -137,6 +137,7 @@ is shown; quoted texts are exact.
 | Case | What happens |
 | --- | --- |
 | Empty text, spaces only, `...`, an emoji, or text with no letter the model can read (Chinese, for example) | `speak()` and `stream()` reject with `nothing to say: the text has no words the model can read; pass a sentence made of letters, for example "Hello."` |
+| Steering tags (`[M2]`, `[breathy:1]`) | Removed before reading, and named in `audio.warnings`: `steering is not supported in this build: removed 1 tag(s) from the text: [M2]`. Links `[label](target)` and `[aside]` are read as written. |
 | A lone `.`, `?` or `!` | Speaks as 0.29 s of audio, with no warning. |
 | Letters outside a to z (Cyrillic, Greek, Chinese) in text that has other words | Left out, and named in `audio.warnings`, for example `["1 word(s) could not be read and are left out: мир"]`. Text whose only readable parts are punctuation (`Привет, мир.`) speaks 0.46 s with that warning; `Привет мир` with no punctuation rejects as above. |
 | Most symbols and emoji (`#`, `~`, `/`, `😀`) | Left out with no warning. Some symbols are read as words: `&` as "and", `%` as "percent", `+` as "plus", `=` as "equals", `@` as "at", `©` as "copyright". |

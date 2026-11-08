@@ -69,6 +69,20 @@ test('speaks "Hello." at 24000 Hz with samples', async () => {
   assert.deepEqual(audio.warnings, []);
 });
 
+test('steering tags are dropped from the speech and named in the warnings', async () => {
+  const plain = await voice.speak(HELLO);
+  const tagged = await voice.speak('[M2] Hello.');
+  assert.deepEqual(tagged.samples, plain.samples);
+  assert.equal(tagged.warnings.length, 1);
+  assert.match(tagged.warnings[0], /steering is not supported.*\[M2\]/);
+});
+
+test('a numeric date is read as a date', async () => {
+  const numeric = await voice.speak('It was 1/2/2026.');
+  const written = await voice.speak('It was January 2nd twenty twenty-six.');
+  assert.equal(numeric.samples.length, written.samples.length);
+});
+
 test('toWav() writes a 16-bit mono 24000 Hz WAV with an AI-generated marker', async () => {
   const audio = await voice.speak(HELLO);
   const wav = audio.toWav();

@@ -64,7 +64,8 @@ zero-talk --stream "Hello there." > out.ogg   # audio to a pipe while it renders
 The ID names files compiled into the package, the same bytes as the model page lists (sizes and SHA-256 in
 `zero_talk.model_info("labzero-ai/zero-talk-11m")`). A given package version always gives
 the same audio on the same system; it differs between operating systems, system versions and processors by
-floating-point rounding.
+floating-point rounding. On macOS the wheel's matrix products use Apple's Accelerate framework, which is faster than the
+pure Rust code the other platforms use.
 
 ## What it does and does not do
 
@@ -81,6 +82,7 @@ Measured on 2026-11-06 with Python 3.12 and this package. Quoted texts are exact
 | Case | What happens |
 | --- | --- |
 | Empty text, spaces only, `...`, an emoji, or text with no letter the model can read (Chinese, for example) | `speak()` raises `ValueError: nothing to say: the text has no words the model can read; pass a sentence made of letters, for example "Hello."`. `stream()` raises the same error at the call, before the first chunk. |
+| Steering tags (`[M2]`, `[breathy:1]`) | Removed before reading, and named in `audio.warnings`: `steering is not supported in this build: removed 1 tag(s) from the text: [M2]`. Links `[label](target)` and `[aside]` are read as written. |
 | A lone `.`, `?` or `!` | Speaks as 0.29 s of audio, with no warning. |
 | Letters outside a to z (Cyrillic, Greek, Chinese) in text that has other words | Left out, and named in `audio.warnings`, for example `["1 word(s) could not be read and are left out: мир"]`. Text whose only readable parts are punctuation (`Привет, мир.`) speaks 0.46 s with that warning; `Привет мир` with no punctuation raises the error above. |
 | Most symbols and emoji (`#`, `~`, `/`, `😀`) | Left out with no warning. Some symbols are read as words: `&` as "and", `%` as "percent", `+` as "plus", `=` as "equals", `@` as "at", `©` as "copyright". |

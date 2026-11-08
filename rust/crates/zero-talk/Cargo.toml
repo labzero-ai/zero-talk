@@ -21,12 +21,13 @@ name = "zero-talk"
 path = "src/main.rs"
 
 [features]
-default = ["embed"]
+default = ["embed", "accelerate"]
 # The model and the text front end are built into the program, so Voice::load needs no files. Without it, give the files to
 # Voice::from_files.
 embed = ["dep:zero-talk-model-11m"]
-# macOS only: Apple's Accelerate framework as a second matrix backend (the command's --backend accelerate). Its results differ
-# slightly from the default backend's.
+# macOS only (on by default, and without effect elsewhere): Apple's Accelerate framework as the matrix backend, which is the
+# default there and about 3-4x faster. The command's --backend portable selects the pure Rust one. The two give results that differ
+# slightly, by floating-point rounding.
 accelerate = []
 
 [dependencies]

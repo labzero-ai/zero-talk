@@ -158,7 +158,7 @@ fn parse(args: Vec<String>) -> Result<Args, Fail> {
         format: None,
         bitrate: None,
         seed: SEED,
-        backend: Backend::Portable,
+        backend: Backend::fastest(),
     };
     let mut rest = args.into_iter();
     while let Some(arg) = rest.next() {
@@ -268,6 +268,9 @@ fn command(args: Vec<String>) -> Result<(), Fail> {
             return streamed.and(player.finish());
         }
     }
+    if let Some(note) = long_input_note(run.sentences.len()) {
+        eprintln!("{note}");
+    }
     let samples = render(&run)?;
     let (t1, c1) = (run.t1, run.c1);
     let (wall, cpu) = (t1.elapsed().as_secs_f64(), cpu_seconds() - c1);
@@ -294,6 +297,14 @@ fn command(args: Vec<String>) -> Result<(), Fail> {
         a.backend.name()
     );
     Ok(())
+}
+
+/// Sentences from which writing a file takes long enough to say what is going on.
+const LONG_INPUT_SENTENCES: usize = 6;
+
+/// The stderr note for a long text that is rendered to a file, which shows nothing until it is done.
+fn long_input_note(sentences: usize) -> Option<String> {
+    (sentences >= LONG_INPUT_SENTENCES).then(|| format!("zero-talk: reading {sentences} sentences; the file appears when all are done, which can take a while. To hear or pipe the audio as it is made, use --stream."))
 }
 
 /// The audio is held back this long before the first write when it is played: a short text can run out of audio while the player
@@ -428,4 +439,17 @@ fn cpu_seconds() -> f64 {
     }
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_secs_f64()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::long_input_note;
+
+    #[test]
+    fn only_long_texts_get_a_progress_note() {
+        assert!(long_input_note(1).is_none());
+        assert!(long_input_note(5).is_none());
+        let note = long_input_note(9).unwrap();
+        assert!(note.contains("9 sentences") && note.contains("--stream"));
+    }
 }

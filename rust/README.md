@@ -56,7 +56,7 @@ fn main() -> zero_talk::Result<()> {
 | `voice.speak(text)` | `Result<Audio>`: `samples()`, `sample_rate()`, `seconds()`, `save(path)`, `to_wav()`, `to_ogg()` |
 | `voice.stream(text)` | `Result<Stream>`: an iterator of `Result<Chunk>`, each with `samples()` |
 
-Text: English, plain sentences; numbers, dates and prices written as digits are read out. Other scripts are skipped with a
+Text: English, plain sentences; numbers, dates (`2026-11-05`, `11/05/2026`, month first unless a field is above 12) and prices written as digits are read out. Other scripts are skipped with a
 warning on `audio.warnings()`.
 
 ## Where the model files come from
@@ -83,7 +83,7 @@ repository `labzero-ai/zero-talk-11m`.
 English only, one voice, 24 kHz mono. Questions come out flat, and long sentences can lose their rhythm; short, plain
 sentences work best. The full list is on the model page.
 
-The tests pass on macOS (Apple silicon), Linux (x86-64 and ARM) and Windows (x86-64). The audio is the same on every
+On macOS the matrix products run on Apple's Accelerate framework by default (about 3 to 4 times faster than the pure Rust code); `zero-talk --backend portable` selects the pure Rust backend. The tests pass on macOS (Apple silicon), Linux (x86-64 and ARM) and Windows (x86-64). The audio is the same on every
 run on one system; it differs between operating systems, system versions and processors by floating-point rounding.
 
 ## Errors and limits
@@ -94,6 +94,7 @@ Measured on 2026-11-06 with a release build of this crate. Quoted texts are exac
 | Case | What happens |
 | --- | --- |
 | Empty text, spaces only, `...`, an emoji, or text with no letter the model can read (Chinese, for example) | `Err`: `nothing to say: the text has no words the model can read; pass a sentence made of letters, for example "Hello."`. `stream()` returns the same error. |
+| Steering tags (`[M2]`, `[breathy:1]`) | Removed before reading, and named in `audio.warnings()`: `steering is not supported in this build: removed 1 tag(s) from the text: [M2]`. Links `[label](target)` and `[aside]` are read as written. |
 | A lone `.`, `?` or `!` | Speaks as 0.29 s of audio, with no warning. |
 | Letters outside a to z (Cyrillic, Greek, Chinese) in text that has other words | Left out, and named by `audio.warnings()`, for example `1 word(s) could not be read and are left out: мир`. The command prints the warning on standard error. Text whose only readable parts are punctuation (`Привет, мир.`) speaks 0.46 s with that warning; `Привет мир` with no punctuation is the error above. |
 | Most symbols and emoji (`#`, `~`, `/`, `😀`) | Left out with no warning. Some symbols are read as words: `&` as "and", `%` as "percent", `+` as "plus", `=` as "equals", `@` as "at", `©` as "copyright". |

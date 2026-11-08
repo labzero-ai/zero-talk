@@ -114,7 +114,7 @@ impl Voice {
             Some(path) => checked_model(Archive::open(path)?, &path.display().to_string())?,
             None => embedded(Embedded::Model)?,
         })?;
-        Ok(Voice { pipeline, frontend, backend: Backend::Portable, seed: SEED })
+        Ok(Voice { pipeline, frontend, backend: Backend::fastest(), seed: SEED })
     }
 
     pub(crate) fn set_backend(&mut self, backend: Backend) {
@@ -129,6 +129,9 @@ impl Voice {
     pub(crate) fn prepare(&self, text: &str) -> Result<(Sentences, Vec<String>)> {
         let plan = self.frontend.plan(text);
         let mut warnings = Vec::new();
+        if !plan.tags.is_empty() {
+            warnings.push(format!("steering is not supported in this build: removed {} tag(s) from the text: {}", plan.tags.len(), plan.tags.join(" ")));
+        }
         if !plan.unread.is_empty() {
             warnings.push(format!("{} word(s) could not be read and are left out: {}", plan.unread.len(), plan.unread.join(" ")));
         }

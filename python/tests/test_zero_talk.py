@@ -27,9 +27,9 @@ MARKER_SOURCE = "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithm
 
 # The WAV files the Rust engine makes for these texts, by SHA-256 of the file.
 ENGINE_WAV_SHA256 = {
-    "Hello.": "5289bd29099cc1769df5406cc6dda9d9669a6c9327b7197a415c677c8afbc85c",
-    "It opened on the 20th of February in 1940, and 48 people came.": "9d258fd6dc92e3206ddc4ccb6b44875609a7bbe2e519b3d95539968c4ad40647",
-    "Built in 1998, it weighs 84.7 kilograms and costs $1,090.61.": "b71eb1fe6a9bd8080339b61676f7969c1a33799354e25736dfbfcb90c37e948f",
+    "Hello.": "c4607d7ac4e842dde2f860871b444a51e00fad8180f2a64933f1b71f9996ea27",
+    "It opened on the 20th of February in 1940, and 48 people came.": "5ae072e8473c224d473730fd90e45bd5cb85d653ea6fdc61638e2bffea401be4",
+    "Built in 1998, it weighs 84.7 kilograms and costs $1,090.61.": "a2ee1850af2cd80a5b33f48d99238c3661f082c80eb6f54732d502d1a5589abd",
 }
 
 LONG_TEXT = "It opened on the 20th of February in 1940, and 48 people came. Built in 1998, it weighs 84.7 kilograms."
@@ -128,6 +128,13 @@ class SpeechTests(unittest.TestCase):
             with self.subTest(text=text):
                 digest = hashlib.sha256(self.voice.speak(text).to_wav()).hexdigest()
                 self.assertEqual(digest, expected)
+
+    def test_steering_tags_are_removed_with_a_warning(self):
+        tagged = self.voice.speak("[M2] Hello.")
+        self.assertEqual(len(tagged.warnings), 1)
+        self.assertIn("steering is not supported", tagged.warnings[0])
+        self.assertIn("[M2]", tagged.warnings[0])
+        self.assertEqual(bytes(memoryview(tagged.samples)), bytes(memoryview(self.voice.speak("Hello.").samples)))
 
     def test_to_wav_and_to_ogg_return_bytes(self):
         audio = self.voice.speak("Hello.")

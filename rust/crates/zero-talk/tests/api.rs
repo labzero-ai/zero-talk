@@ -97,6 +97,14 @@ fn unreadable_words_are_left_out_with_a_warning() {
 }
 
 #[test]
+fn steering_tags_are_left_out_with_a_warning() {
+    let voice = Voice::load(ID).unwrap();
+    let tagged = voice.speak("[M2] Hello.").unwrap();
+    assert!(tagged.warnings().iter().any(|w| w.contains("steering is not supported") && w.contains("[M2]")), "{:?}", tagged.warnings());
+    assert!(tagged.samples() == voice.speak("Hello.").unwrap().samples());
+}
+
+#[test]
 fn files_give_the_same_voice_as_the_built_in_one() {
     let data = model_files("from-files");
     let from_files = Voice::from_files(data.join("model.bin"), data.join("frontend.bin")).expect("the model files load");
