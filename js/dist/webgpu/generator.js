@@ -63,6 +63,46 @@ const dftTable = () => {
   return out;
 };
 
+// Assigns the arena's values (name, words, first and last dispatch that touch them; first -1 for an input written before the first
+// dispatch, last = the number of dispatches for the audio, copied after the last) to buffers so that two values share a buffer only
+// when their dispatches do not overlap. The intervals are closed: a dispatch's output never gets the buffer of an input it reads (a
+// buffer is not read and written by one dispatch), and one buffer is never bound twice with different access. The assignment is greedy:
+// each strategy places the values in an order and puts each in the buffer that is free for its interval and needs the least growth;
+// the cheapest result wins. Returns { of: buffer index per value id, sizes: words per buffer, peak: the most words alive at once }.
+export function layoutArena(vals, nCalls) {
+  const items = vals.map((v) => ({ id: v.id, words: Math.max(4, v.words), a: v.first, b: v.edge === 'out' ? nCalls : v.last }));
+  for (const it of items) if (!(it.b >= it.a)) throw new Error(`the arena value ${vals[it.id].name} is never used`);
+  const orders = [
+    (x, y) => y.words - x.words || x.a - y.a || x.id - y.id,   // the largest first
+    (x, y) => x.a - y.a || y.words - x.words || x.id - y.id,   // in order of first use
+    (x, y) => (y.b - y.a) - (x.b - x.a) || y.words - x.words || x.id - y.id, // the longest-lived first
+  ];
+  let best = null;
+  for (const cmp of orders) {
+    const bufs = [], of = new Array(items.length);
+    for (const it of [...items].sort(cmp)) {
+      let pick = -1;
+      for (let j = 0; j < bufs.length; j++) {
+        if (bufs[j].spans.some((s) => s.a <= it.b && it.a <= s.b)) continue;
+        const grow = Math.max(0, it.words - bufs[j].words), cur = pick < 0 ? 0 : Math.max(0, it.words - bufs[pick].words);
+        // The least growth; of equal growth (none), the smaller buffer (best fit).
+        if (pick < 0 || grow < cur || (grow === cur && grow === 0 && bufs[j].words < bufs[pick].words)) pick = j;
+      }
+      if (pick < 0) { bufs.push({ words: 0, spans: [] }); pick = bufs.length - 1; }
+      bufs[pick].words = Math.max(bufs[pick].words, it.words);
+      bufs[pick].spans.push(it);
+      of[it.id] = pick;
+    }
+    const total = bufs.reduce((a, b) => a + b.words, 0);
+    if (!best || total < best.total) best = { total, of, sizes: bufs.map((b) => b.words) };
+  }
+  const at = new Map();
+  for (const it of items) for (const t of [it.a, it.b]) at.set(t, 0);
+  let peak = 0;
+  for (const t of at.keys()) peak = Math.max(peak, items.filter((it) => it.a <= t && t <= it.b).reduce((a, it) => a + it.words, 0));
+  return { of: best.of, sizes: best.sizes, peak };
+}
+
 export class GpuGenerator {
   // The weights, the pipelines, the shared activations and the audio readback are made here; a plan is made on the first window
   // of each length.
@@ -218,22 +258,22 @@ export class GpuGenerator {
   }
 
   // The activations and the audio readback, shared by every window length and sized for the longest one. Every kernel indexes by
-  // its length and channel uniforms, never by the buffer's size, so a shorter window uses the front of each buffer. A(words) makes
-  // a buffer of float32 words. The readback ring takes the audio of OUTSTANDING windows in flight (see submit).
+  // its length and channel uniforms, never by the buffer's size, so a shorter window uses the front of each buffer. The call schedule
+  // is traced once at the arena's size (schedule with a recording p): every activation is a value with the dispatches that first and
+  // last touch it, and values whose dispatches do not overlap share a buffer (layoutArena), so the arena holds the activations that are
+  // alive together, not all of them. A plan binds the buffer of each value in the order the schedule makes them. The readback ring
+  // takes the audio of OUTSTANDING windows in flight (see submit).
   allocArena() {
-    const M = this.maxFrames, L16 = 10 * M, LH = 60 * M + 1, L1 = 60 * M, N = SAMPLES_PER_FRAME * M, r0 = this.up0a.cout;
-    const blocks = [...this.blocks.values()], lenOf = (b) => (b.short ? L16 : LH);
-    const maxIn = Math.max(...blocks.map((b) => b.C * lenOf(b))), maxT = Math.max(1, ...blocks.map((b) => b.rank * lenOf(b)));
+    const M = this.maxFrames, N = SAMPLES_PER_FRAME * M, trace = { L: M, trace: true, calls: [], vals: [], val: (name, words, edge) => {
+      const v = { id: trace.vals.length, name, words, first: edge === 'in' ? -1 : Infinity, last: -1, edge };
+      trace.vals.push(v);
+      return v;
+    } };
+    this.schedule(trace);
+    const layout = layoutArena(trace.vals, trace.calls.length);
     const A = (words) => this.mk(4 * words, STORAGE, this.arenaBufs);
-    this.arena = {
-      S: { in: A(maxIn), y: A(maxIn), t1: A(maxT), t2: A(maxT) },
-      xin: A(512 * M), harin: A(24 * LH),
-      nc0: A(256 * L16), xs0: A(256 * L16), nc1: A(128 * LH), xs1: A(128 * LH), lx: A(512 * M), u0a: A(r0 * M), u0b: A(r0 * L16),
-      u0: A(256 * L16), x1: A(256 * L16), o: [A(256 * L16), A(256 * L16), A(256 * L16)],
-      s0: A(256 * L16), st0: A(256 * L16), lx2: A(256 * L16), u1: A(128 * L1), x3: A(128 * LH),
-      o3: [A(128 * LH), A(128 * LH), A(128 * LH)], s1: A(128 * LH), x4: A(128 * LH), lx4: A(128 * LH),
-      post: A(24 * LH), pol: A(22 * LH), frames: A(20 * LH), audio: A(N),
-    };
+    this.layout = { bufs: layout.sizes.map(A), of: layout.of, names: trace.vals.map((v) => v.name), calls: trace.calls,
+      words: layout.sizes.reduce((a, b) => a + b, 0), unshared: trace.vals.reduce((a, v) => a + v.words, 0), peak: layout.peak };
     this.staging = Array.from({ length: OUTSTANDING }, () => this.mk(4 * N, READBACK, this.arenaBufs));
   }
 
@@ -305,13 +345,27 @@ export class GpuGenerator {
     this.hasAffines = true;
   }
 
-  // A dispatch: its bind group (binding index -> buffer), its grid, and the label it is reported by.
-  disp(p, kern, binds, gx, gy = 1, label = kern.label) {
-    const entries = Object.entries(binds).filter(([, b]) => b).map(([i, b]) => ({ binding: +i, resource: { buffer: b } }));
-    p.calls.push({ pipe: kern.pipe, bg: this.device.createBindGroup({ layout: kern.pipe.getBindGroupLayout(0), entries }), gx, gy, label });
+  // A dispatch: its bind group (binding index -> buffer), its grid, and the label it is reported by. outs: the bindings it writes.
+  // In a trace (p.trace) the bindings are values, and the dispatch only records which values it reads and writes.
+  disp(p, kern, binds, gx, gy = 1, label = kern.label, outs = [3]) {
+    const entries = Object.entries(binds).filter(([, b]) => b);
+    if (p.trace) {
+      const at = p.calls.length;
+      for (const [i, v] of entries) {
+        if (v.words === undefined) continue; // a weight, a table or a site's affine: not an activation
+        v.first = Math.min(v.first, at);
+        v.last = Math.max(v.last, at);
+      }
+      p.calls.push({ label, reads: entries.filter(([i, v]) => v.words !== undefined && !outs.includes(+i)).map(([, v]) => v.id),
+        writes: entries.filter(([i, v]) => v.words !== undefined && outs.includes(+i)).map(([, v]) => v.id) });
+      return;
+    }
+    p.calls.push({ pipe: kern.pipe, bg: this.device.createBindGroup({ layout: kern.pipe.getBindGroupLayout(0),
+      entries: entries.map(([i, b]) => ({ binding: +i, resource: { buffer: b } })) }), gx, gy, label });
   }
 
   uni(p, ...v) {
+    if (p.trace) return null;
     const u = this.mk(16, UNIFORM, p.bufs);
     this.device.queue.writeBuffer(u, 0, new Uint32Array([...v, 0, 0, 0, 0].slice(0, 4)));
     return u;
@@ -332,61 +386,92 @@ export class GpuGenerator {
     this.disp(p, kern, { 0: this.uni(p, len, lin), 1: x, 2: y, 3: o }, Math.ceil(len / 256), channels);
   }
 
-  // One residual block from `input` into `out`: the stream lives in the shared scratch (S), the block's inputs are read where they
-  // are. Unit 0 adds the input as its residual, unit 1 accumulates into the stream, unit 2 writes `out`.
+  // One residual block from `input` into `out`: the stream (sin) is a value of its own, the block's inputs are read where they
+  // are. Unit 0 adds the input as its residual, unit 1 accumulates into the stream, unit 2 writes `out`. A unit's temporaries (y, and
+  // the Tucker convolution's two) are values that die inside the unit.
   block(p, b, input, out, len) {
-    const S = this.arena.S;
+    const sin = p.val(`${b.name}.stream`, b.C * len);
     b.units.forEach((un, u) => {
-      const stream = u === 0 ? input : S.in;
-      if (un.c1.dense) this.conv(p, un.c1.dense, { src: stream, dst: S.y, len, lin: len, pro: un.s1 });
+      const stream = u === 0 ? input : sin, y = p.val(`${b.name}.${u}.y`, b.C * len);
+      if (un.c1.dense) this.conv(p, un.c1.dense, { src: stream, dst: y, len, lin: len, pro: un.s1 });
       else {
-        this.conv(p, un.c1.first, { src: stream, dst: S.t1, len, lin: len, pro: un.s1 });
-        this.conv(p, un.c1.core, { src: S.t1, dst: S.t2, len, lin: len });
-        this.conv(p, un.c1.last, { src: S.t2, dst: S.y, len, lin: len });
+        const t1 = p.val(`${b.name}.${u}.c1.t1`, un.c1.first.cout * len), t2 = p.val(`${b.name}.${u}.c1.t2`, un.c1.core.cout * len);
+        this.conv(p, un.c1.first, { src: stream, dst: t1, len, lin: len, pro: un.s1 });
+        this.conv(p, un.c1.core, { src: t1, dst: t2, len, lin: len });
+        this.conv(p, un.c1.last, { src: t2, dst: y, len, lin: len });
       }
-      const dst = u === 2 ? out : S.in, res = u === 2 ? S.in : input;
-      if (un.c2.dense) this.conv(p, un.c2.dense, { src: S.y, dst, len, lin: len, pro: un.s2, res });
+      const dst = u === 2 ? out : sin, res = u === 2 ? sin : input;
+      if (un.c2.dense) this.conv(p, un.c2.dense, { src: y, dst, len, lin: len, pro: un.s2, res });
       else {
-        this.conv(p, un.c2.first, { src: S.y, dst: S.t1, len, lin: len, pro: un.s2 });
-        this.conv(p, un.c2.core, { src: S.t1, dst: S.t2, len, lin: len });
-        this.conv(p, un.c2.last, { src: S.t2, dst, len, lin: len, res });
+        const t1 = p.val(`${b.name}.${u}.c2.t1`, un.c2.first.cout * len), t2 = p.val(`${b.name}.${u}.c2.t2`, un.c2.core.cout * len);
+        this.conv(p, un.c2.first, { src: y, dst: t1, len, lin: len, pro: un.s2 });
+        this.conv(p, un.c2.core, { src: t1, dst: t2, len, lin: len });
+        this.conv(p, un.c2.last, { src: t2, dst, len, lin: len, res });
       }
     });
   }
 
-  // The calls of a run with L latent frames (L = 80 Hz frames, SAMPLES_PER_FRAME L output samples), on the shared buffers.
-  buildPlan(L) {
-    const A = this.arena, L16 = 10 * L, LH = 60 * L + 1, N = SAMPLES_PER_FRAME * L, p = { L, calls: [], bufs: [] };
+  // The calls of a run with L latent frames (L = 80 Hz frames, SAMPLES_PER_FRAME L output samples) into p, and the values they pass
+  // between them (p.val). The order of the calls and of the values does not depend on L, only the lengths do. The inputs (xin, harin)
+  // are written before the first call and the audio is copied after the last. Returns those three values.
+  schedule(p) {
+    const L = p.L, L16 = 10 * L, LH = 60 * L + 1, L1 = 60 * L, N = SAMPLES_PER_FRAME * L, r0 = this.up0a.cout, V = p.val;
     const B = (name, input, out, len) => this.block(p, this.blocks.get(name), input, out, len);
-    // The source's convolutions, then the residual blocks of the two noise branches.
-    this.conv(p, this.nc0, { src: A.harin, dst: A.nc0, len: L16, lin: LH });
-    B('noise_res.0', A.nc0, A.xs0, L16);
-    this.conv(p, this.nc1, { src: A.harin, dst: A.nc1, len: LH, lin: LH });
-    B('noise_res.1', A.nc1, A.xs1, LH);
-    // Step 0: ups.0 (Tucker), the sum with the source, the mean of resblocks 0 to 2.
-    this.ew(p, this.elem.leaky01, A.xin, A.xin, A.lx, 512, L, L);
-    this.conv(p, this.up0a, { src: A.lx, dst: A.u0a, len: L, lin: L });
-    this.tconv(p, this.up0b, { src: A.u0a, dst: A.u0b, len: L16, lin: L });
-    this.conv(p, this.up0c, { src: A.u0b, dst: A.u0, len: L16, lin: L16 });
-    this.ew(p, this.elem.add, A.u0, A.xs0, A.x1, 256, L16, L16);
-    ['resblocks.0', 'resblocks.1', 'resblocks.2'].forEach((n, i) => B(n, A.x1, A.o[i], L16));
-    this.ew(p, this.elem.add, A.o[0], A.o[1], A.s0, 256, L16, L16);
-    this.ew(p, this.elem.avg3, A.s0, A.o[2], A.st0, 256, L16, L16);
+    const xin = V('xin', 512 * L, 'in'), harin = V('harin', 24 * LH, 'in');
+    // Step 0: ups.0 (Tucker), the sum with the source (its noise branch runs just before, so that its output is alive for one call), the
+    // mean of resblocks 0 to 2. The calls of the two noise branches sit next to their consumers, which only moves independent work.
+    const nc0 = V('nc0', 256 * L16), xs0 = V('xs0', 256 * L16);
+    const lx = V('lx', 512 * L), u0a = V('u0a', r0 * L), u0b = V('u0b', r0 * L16), u0 = V('u0', 256 * L16), x1 = V('x1', 256 * L16);
+    this.ew(p, this.elem.leaky01, xin, xin, lx, 512, L, L);
+    this.conv(p, this.up0a, { src: lx, dst: u0a, len: L, lin: L });
+    this.tconv(p, this.up0b, { src: u0a, dst: u0b, len: L16, lin: L });
+    this.conv(p, this.up0c, { src: u0b, dst: u0, len: L16, lin: L16 });
+    this.conv(p, this.nc0, { src: harin, dst: nc0, len: L16, lin: LH });
+    B('noise_res.0', nc0, xs0, L16);
+    this.ew(p, this.elem.add, u0, xs0, x1, 256, L16, L16);
+    const s0 = V('s0', 256 * L16), st0 = V('st0', 256 * L16), o = [0, 1, 2].map((i) => V(`o${i}`, 256 * L16));
+    B('resblocks.0', x1, o[0], L16);
+    B('resblocks.1', x1, o[1], L16);
+    this.ew(p, this.elem.add, o[0], o[1], s0, 256, L16, L16); // the first two outputs are summed before the third block runs, so they are not alive together with its scratch
+    B('resblocks.2', x1, o[2], L16);
+    this.ew(p, this.elem.avg3, s0, o[2], st0, 256, L16, L16);
     // Step 1: ups.1, the reflection-padded sum with the source, the mean of resblocks 3 to 5, conv_post, the iSTFT.
-    this.ew(p, this.elem.leaky01, A.st0, A.st0, A.lx2, 256, L16, L16);
-    this.tconv(p, this.up1, { src: A.lx2, dst: A.u1, len: 60 * L, lin: L16 });
-    this.ew(p, this.elem.addReflect, A.u1, A.xs1, A.x3, 128, LH, 60 * L);
-    ['resblocks.3', 'resblocks.4', 'resblocks.5'].forEach((n, i) => B(n, A.x3, A.o3[i], LH));
-    this.ew(p, this.elem.add, A.o3[0], A.o3[1], A.s1, 128, LH, LH);
-    this.ew(p, this.elem.avg3, A.s1, A.o3[2], A.x4, 128, LH, LH);
-    this.ew(p, this.elem.leaky001, A.x4, A.x4, A.lx4, 128, LH, LH);
-    this.conv(p, this.post, { src: A.lx4, dst: A.post, len: LH, lin: LH });
-    this.disp(p, this.kPolar, { 0: this.uni(p, 22 * LH, LH), 1: A.post, 2: A.pol }, Math.ceil((22 * LH) / 256));
-    this.disp(p, this.kFrame, { 0: this.uni(p, LH), 1: A.pol, 2: this.cs, 3: this.win, 4: A.frames }, Math.ceil(LH / 64));
-    this.disp(p, this.kOla, { 0: this.uni(p, N, LH), 1: A.frames, 2: this.win, 3: A.audio }, Math.ceil(N / 64));
+    const lx2 = V('lx2', 256 * L16), u1 = V('u1', 128 * L1), x3 = V('x3', 128 * LH), nc1 = V('nc1', 128 * LH), xs1 = V('xs1', 128 * LH);
+    this.ew(p, this.elem.leaky01, st0, st0, lx2, 256, L16, L16);
+    this.conv(p, this.nc1, { src: harin, dst: nc1, len: LH, lin: LH });
+    B('noise_res.1', nc1, xs1, LH);
+    this.tconv(p, this.up1, { src: lx2, dst: u1, len: L1, lin: L16 });
+    this.ew(p, this.elem.addReflect, u1, xs1, x3, 128, LH, L1);
+    const o3 = [0, 1, 2].map((i) => V(`o3.${i}`, 128 * LH));
+    const s1 = V('s1', 128 * LH), x4 = V('x4', 128 * LH), lx4 = V('lx4', 128 * LH), post = V('post', 24 * LH), pol = V('pol', 22 * LH);
+    const frames = V('frames', 20 * LH), audio = V('audio', N, 'out');
+    B('resblocks.3', x3, o3[0], LH);
+    B('resblocks.4', x3, o3[1], LH);
+    this.ew(p, this.elem.add, o3[0], o3[1], s1, 128, LH, LH);
+    B('resblocks.5', x3, o3[2], LH);
+    this.ew(p, this.elem.avg3, s1, o3[2], x4, 128, LH, LH);
+    this.ew(p, this.elem.leaky001, x4, x4, lx4, 128, LH, LH);
+    this.conv(p, this.post, { src: lx4, dst: post, len: LH, lin: LH });
+    this.disp(p, this.kPolar, { 0: this.uni(p, 22 * LH, LH), 1: post, 2: pol }, Math.ceil((22 * LH) / 256), 1, undefined, [2]);
+    this.disp(p, this.kFrame, { 0: this.uni(p, LH), 1: pol, 2: this.cs, 3: this.win, 4: frames }, Math.ceil(LH / 64), 1, undefined, [4]);
+    this.disp(p, this.kOla, { 0: this.uni(p, N, LH), 1: frames, 2: this.win, 3: audio }, Math.ceil(N / 64));
+    return { xin, harin, audio };
+  }
+
+  // The calls of a run with L latent frames, on the arena's buffers: the schedule with each value bound to the buffer layoutArena gave it.
+  buildPlan(L) {
+    const lay = this.layout, LH = 60 * L + 1;
+    let next = 0;
+    const p = { L, calls: [], bufs: [], val: (name, words) => {
+      const id = next++, buf = lay.bufs[lay.of[id]];
+      if (lay.names[id] !== name || 4 * words > buf.size) throw new Error(`the arena has no room for ${name} (${words} words)`);
+      return buf;
+    } };
+    const { xin, harin, audio } = this.schedule(p);
+    if (next !== lay.names.length || p.calls.length !== lay.calls.length) throw new Error('the call schedule changed since the arena was laid out');
     // Rows 22 and 23 of harin are the source's channel padding (zero weights in nc0 and nc1); every window clears them, since the
     // shared buffer may hold an earlier window's data there.
-    return Object.assign(p, { xin: A.xin, harin: A.harin, audio: A.audio, pad: { offset: 4 * 22 * LH, size: 4 * 2 * LH } });
+    return Object.assign(p, { xin, harin, audio, pad: { offset: 4 * 22 * LH, size: 4 * 2 * LH } });
   }
 
   // The plan of window length L, built on first use; the least recently used plan is destroyed beyond MAX_PLANS.
