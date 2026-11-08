@@ -281,8 +281,10 @@ pub struct Stream<'g> {
 
 /// Pushes are processed in blocks of at most this many frames: buffers are sized by the block, so memory stays
 /// bounded for any push. The streaming buffers (the convolutions' histories and the residual queues of every unit) are as wide as a block, so
-/// a smaller block is a smaller generator state: 8 frames hold about half the memory of 16, at about 2% more time, and give the same samples.
-const BLOCK: usize = 8;
+/// a smaller block is a smaller generator state. WebAssembly takes 8 frames, which hold about half the memory of 16 at about 2% more time
+/// and give the same samples there (its matrix products do not depend on their shape). The native builds keep 16: Apple's Accelerate rounds
+/// a product differently for another shape, so another block would change their audio.
+const BLOCK: usize = if cfg!(target_arch = "wasm32") { 8 } else { 16 };
 
 impl Stream<'_> {
     pub fn push(&mut self, x: &Act, har: &Act) -> Vec<f32> {
