@@ -198,7 +198,13 @@ impl PyAudio {
             }
         }
         .map_err(engine_error)?;
-        std::fs::write(&path, bytes).map_err(|e| PyOSError::new_err(format!("{}: {}", path.display(), e)))?;
+        std::fs::write(&path, bytes).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                PyFileNotFoundError::new_err(format!("{}: No such file or directory; create the folder first", path.display()))
+            } else {
+                PyOSError::new_err(format!("{}: {}", path.display(), e))
+            }
+        })?;
         Ok(())
     }
 

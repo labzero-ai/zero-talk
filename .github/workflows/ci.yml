@@ -60,6 +60,17 @@ jobs:
       - name: Rebuild js/dist/engine.wasm and compare it with the file, model.json and files.json
         run: rust/crates/zero-talk-wasm/build.sh --check
 
+  docs:
+    name: README facts match the code and the release set-up
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+      - run: python3 .github/scripts/check-docs.py
+
   python:
     name: python ${{ matrix.python }} (${{ matrix.os }})
     strategy:

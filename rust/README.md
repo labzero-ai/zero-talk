@@ -1,7 +1,9 @@
 # Zero Talk
 
 Zero Talk 11M, an English text-to-speech model with about 11M parameters, and its engine in Rust: a library and the
-`zero-talk` command. The model is compiled in, so a build speaks on its own: no Python, no GPU, no network access.
+`zero-talk` command. The model is compiled in, so a build speaks on its own: no Python, no GPU, no network access. Made for
+reading short English texts aloud where size and privacy matter. Not for long narration, other languages or imitating real
+people.
 
 Model page and live demo: https://labzero.ai/zero-talk-11m/
 
@@ -12,15 +14,18 @@ Model page and live demo: https://labzero.ai/zero-talk-11m/
 
 ## Command line
 
+`cargo install zero-talk` needs a Rust toolchain (https://rustup.rs) and compiles the engine locally, which takes a few minutes.
+
 ```sh
 cargo install zero-talk
 
-zero-talk "Hello there." -o hello.ogg     # Ogg Opus at 24 kbps; a .wav name writes WAV
-zero-talk "Hello there."                  # plays it while it renders (ffplay, paplay or aplay)
+zero-talk "Hello there." -o hello.ogg     # Ogg Opus at 24 kbit/s, 24 kHz mono: 1.8 s of speech in 5 KB; a .wav name writes WAV
+zero-talk "Hello there."                  # plays it while it renders, through a player on your system (see below)
 zero-talk --stream "Hello there." > out.ogg
 ```
 
-WAV and Ogg files carry an AI-generated marker in their metadata.
+Playing without `-o` needs a player: `afplay` (or `ffplay` for `--stream`) on macOS, `paplay`, `pw-play`, `aplay` or `ffplay`
+on Linux, PowerShell on Windows. Without one the command stops with `no audio player found (tried …); write a file instead: add -o OUT.ogg`.
 
 ## Library
 
@@ -34,8 +39,8 @@ fn main() -> zero_talk::Result<()> {
     let voice = zero_talk::Voice::load("labzero-ai/zero-talk-11m")?;
     let audio = voice.speak("Hello from a small voice.")?;
 
-    audio.save("hello.wav")?;          // the extension picks the format: .wav or .ogg (Ogg Opus)
-    let samples: &[f32] = audio.samples();   // mono, 24 kHz
+    audio.save("hello.ogg")?;          // the extension picks the format: .ogg (Ogg Opus) or .wav
+    let samples: &[f32] = audio.samples();   // mono, 24 kHz, values from -1 to 1
     assert!(!samples.is_empty());
 
     for chunk in voice.stream("A longer text, read piece by piece.")? {
@@ -53,38 +58,102 @@ fn main() -> zero_talk::Result<()> {
 | --- | --- |
 | `Voice::load(id)` | `Result<Voice>`. `id` is `"labzero-ai/zero-talk-11m"`, the only voice in this version; `zero_talk::voices()` lists them. Needs the default `embed` feature. |
 | `Voice::from_files(model, frontend)` | `Result<Voice>`, from model files on disk (works without `embed`) |
-| `voice.speak(text)` | `Result<Audio>`: `samples()`, `sample_rate()`, `seconds()`, `save(path)`, `to_wav()`, `to_ogg()` |
+| `voice.speak(text)` | `Result<Audio>`: `samples()`, `sample_rate()`, `seconds()`, `warnings()`, `save(path)`, `to_wav()`, `to_ogg()` |
 | `voice.stream(text)` | `Result<Stream>`: an iterator of `Result<Chunk>`, each with `samples()` |
 
-Text: English, plain sentences; numbers, dates (`2026-11-05`, `11/05/2026`, month first unless a field is above 12) and prices written as digits are read out. Other scripts are skipped with a
-warning on `audio.warnings()`.
+## Text it reads
+
+English, plain sentences. The front end rewrites written forms as the words a person would say before the voice reads them.
+Examples of that rewriting step (digits are turned into words afterwards):
+
+| Written | Rewritten as |
+| --- | --- |
+| `Elm Ave.` (more text follows) | `Elm Avenue` |
+| `9:30 a.m.` | `9 thirty A M` |
+| `800-555-0199` | digits, one by one |
+| `2.75 kg`, `10 km` | `two point seven five kilograms`, `10 kilometers` |
+| `18 °C` | `18 degrees Celsius` |
+| `2026-11-05` | `November 5th twenty twenty-six` |
+| `example.com` | `example dot com` |
+| `€20` | `20 euros` |
+
+Dates (`2026-11-05`, `11/05/2026`) are read month first unless a field is above 12. A `St.` at the very end of a text is not
+expanded. Other scripts are skipped with a warning on `audio.warnings()`.
 
 ## Where the model files come from
 
-`zero-talk-model-11m` holds the model and front-end files, the same bytes as the model page lists (sizes and SHA-256 in
-`model.json`). The engine embeds them through its default `embed` feature, and `Voice::load` finds them by ID. Keeping
-the data in its own crate means an engine update does not re-publish the model. To ship your own copy instead:
+`zero-talk-model-11m` holds the model and front-end files as byte slices, `zero_talk_model_11m::MODEL` and
+`zero_talk_model_11m::FRONTEND`, with their sizes and SHA-256 hashes (`MODEL_BYTES`, `MODEL_SHA256`, `FRONTEND_BYTES`,
+`FRONTEND_SHA256`), the same as the model page lists. The engine embeds them through its default `embed` feature, and
+`Voice::load` finds them by ID. Keeping the data in its own crate means an engine update does not re-publish the model. To
+ship your own copy instead:
 
 ```toml
 zero-talk = { version = "1", default-features = false }
 ```
 
-Without `embed`, `Voice::load` returns an error that says so; give the two files yourself:
+Without `embed`, `Voice::load` returns an error that says so; give the two files yourself. To get them from the crate:
 
 ```rust
+std::fs::write("model.bin", zero_talk_model_11m::MODEL)?;       // add zero-talk-model-11m = "1" to Cargo.toml
+std::fs::write("frontend.bin", zero_talk_model_11m::FRONTEND)?;
 let voice = zero_talk::Voice::from_files("model.bin", "frontend.bin")?;
 ```
 
-`model.bin` and `frontend.bin` are the files in the `data/` folder of the `zero-talk-model-11m` crate, and in the Hugging Face
-repository `labzero-ai/zero-talk-11m`.
+The same two files are in the Hugging Face repository `labzero-ai/zero-talk-11m` (https://huggingface.co/labzero-ai/zero-talk-11m).
+
+## Privacy
+
+No text you give it and no audio it makes leaves the device. The library and the command make no network request.
+
+## Speed and memory
+
+Measured with Zero Talk 1.0 on 2026-11-09 (UTC), reading the 503-character text in
+[`bench/text.txt`](https://github.com/labzero-ai/zero-talk/blob/main/bench/text.txt) (32.8 s of speech) with a release build on
+an Apple M1 Pro (10 cores, 32 GB):
+
+| Backend | Speed | Peak memory |
+| --- | --- | --- |
+| macOS default (Apple's Accelerate library) | 10 times real time | about 230 MB |
+| `--backend portable` (pure Rust; the only backend on Linux and Windows) | 2.7 times real time | about 200 MB |
+
+"Real time" means seconds of speech made per second of compute. Memory grows with the text: 3,280 s of speech from 50,300
+characters took 335 s and peaked at about 730 MB. Other CPUs differ; `zero-talk` prints its own speed after each file, and
+`bench/` in the repository has the text and scripts to measure your own machine.
+
+## Why this one
+
+About 9 MB with the engine, against 68 to 341 MB for the files Pocket TTS and Kokoro-82M install (not counting PyTorch).
+On 52 everyday sentences read back by a speech recogniser, the word error rate was 6.5% to 6.7% (95% intervals 4.1 to 9.6%),
+level with Pocket TTS 18.2M and Kokoro-82M, whose intervals overlap (trial of 2026-11-06). It has one voice and reads
+English only. More detail is in the [repository README](https://github.com/labzero-ai/zero-talk#why-this-one).
 
 ## What it does and does not do
 
-English only, one voice, 24 kHz mono. Questions come out flat, and long sentences can lose their rhythm; short, plain
-sentences work best. The full list is on the model page.
+English only, one voice, 24 kHz mono. Questions come out flat and exclamations do not come across; long sentences can lose
+their rhythm; some S sounds have a slight lisp; "Hi, …" greetings can sound unnatural; some names are read oddly; there are
+no tempo or pause controls. Short, plain sentences work best. The full list is on the model page.
 
-On macOS the matrix products run on Apple's Accelerate framework by default (about 3 to 4 times faster than the pure Rust code); `zero-talk --backend portable` selects the pure Rust backend. The tests pass on macOS (Apple silicon), Linux (x86-64 and ARM) and Windows (x86-64). The audio is the same on every
-run on one system; it differs between operating systems, system versions and processors by floating-point rounding.
+Silent cases: most symbols and emoji are left out without a warning, whole numbers of more than 306 digits are dropped,
+and a lone `.` speaks as 0.29 s of audio.
+
+WAV and Ogg files from `to_wav()`, `to_ogg()`, `save()` and the command carry an AI-generated label in their metadata: a
+comment in both and, in Ogg, the IPTC digital source type `trainedAlgorithmicMedia`. It is a label, not a watermark:
+re-encoding or stripping metadata removes it, and `audio.samples()` and `--format pcm` carry none.
+
+The tests pass on macOS (Apple silicon), Linux (x86-64 and ARM) and Windows (x86-64). The audio is the same on every run on
+one system; it differs between operating systems, system versions and processors by floating-point rounding.
+
+## FAQ
+
+**Can it clone a voice or imitate a person?** No. It has one fixed voice and no way to pass a reference recording.
+
+**Why Ogg Opus and not MP3?** Ogg Opus is an open codec with small files at this quality (24 kbit/s). `--bitrate` sets it from
+8 to 128 kbit/s. Some old players cannot open it; convert once with `ffmpeg -i hello.ogg hello.mp3`.
+
+**Does it send my text anywhere?** No. See Privacy above.
+
+**Where do I report a problem?** [GitHub issues](https://github.com/labzero-ai/zero-talk/issues).
 
 ## Errors and limits
 
@@ -94,17 +163,17 @@ Measured on 2026-11-06 with a release build of this crate. Quoted texts are exac
 | Case | What happens |
 | --- | --- |
 | Empty text, spaces only, `...`, an emoji, or text with no letter the model can read (Chinese, for example) | `Err`: `nothing to say: the text has no words the model can read; pass a sentence made of letters, for example "Hello."`. `stream()` returns the same error. |
-| Steering tags (`[M2]`, `[breathy:1]`) | Removed before reading, and named in `audio.warnings()`: `steering is not supported in this build: removed 1 tag(s) from the text: [M2]`. Links `[label](target)` and `[aside]` are read as written. |
+| Steering tags (`[M2]`, `[breathy:1]`) | Not supported: removed before reading, and named in `audio.warnings()`. Links `[label](target)` and `[aside]` are read as written. |
 | A lone `.`, `?` or `!` | Speaks as 0.29 s of audio, with no warning. |
 | Letters outside a to z (Cyrillic, Greek, Chinese) in text that has other words | Left out, and named by `audio.warnings()`, for example `1 word(s) could not be read and are left out: мир`. The command prints the warning on standard error. Text whose only readable parts are punctuation (`Привет, мир.`) speaks 0.46 s with that warning; `Привет мир` with no punctuation is the error above. |
 | Most symbols and emoji (`#`, `~`, `/`, `😀`) | Left out with no warning. Some symbols are read as words: `&` as "and", `%` as "percent", `+` as "plus", `=` as "equals", `@` as "at", `©` as "copyright". |
 | A whole number of more than 306 digits | Left out with no warning; a 307-digit number leaves only its full stop. |
-| Length | A text of 5,016 characters (96 sentences) speaks in full: 306 s of speech in 96 s, peak memory about 307 MB. A text of 50,000 characters (8,908 words) also speaks in full: 3,049 s of speech in 961 s. One sentence of 11,263 characters with no full stop speaks in full in the Python tests (644 s of speech). The text is split into pieces of at most 510 phonemes; a longer sentence is split too, with no warning. |
+| Length | A text of 5,016 characters (96 sentences) and a text of 50,000 characters (8,908 words) speak in full, not truncated. The text is split into pieces of at most 510 phonemes (the units of sound the model reads); a longer sentence is split too, with no warning. |
 | Unknown voice ID | `Err`: `no voice named 'labzero-ai/unknown'; the voices are: labzero-ai/zero-talk-11m` |
 | `Voice::from_files` with the files missing | `Err`: `<folder>/frontend.bin: No such file or directory` (the front-end file is opened first) |
 | `Voice::from_files` with a file of another kind | `Err`: `<folder>/model.bin: this is a 'frontend' file, not a model file` |
 | `save()` with another extension (`.mp3`, none) | `Err`: `<path>: save() writes .wav (WAV) or .ogg (Ogg Opus); name the file with one of those extensions`. Nothing is written. `.WAV` in capitals works. |
-| `save()` into a missing folder | `Err`: `<path>: No such file or directory` |
+| `save()` into a missing folder | `Err`: `<path>: No such file or directory; create the folder first` |
 | Command options | `zero-talk: --bitrate needs a whole number of kbit/s from 8 to 128, not '999'`; `zero-talk: x.mp3: the output file must end in .ogg (Ogg Opus) or .wav (WAV); MP3 is not built`; `--format` takes `ogg`, `wav` or `pcm`. |
 
 Streaming: `stream()` yields one `Result<Chunk>` for each piece as it is made; for a three-sentence text that is 11 chunks,

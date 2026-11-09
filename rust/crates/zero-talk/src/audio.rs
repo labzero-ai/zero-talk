@@ -63,7 +63,10 @@ impl Audio {
                 )))
             }
         };
-        std::fs::write(path, bytes).map_err(|e| Error::new(format!("{}: {}", path.display(), io_message(&e))))
+        std::fs::write(path, bytes).map_err(|e| {
+            let hint = if e.kind() == std::io::ErrorKind::NotFound { "; create the folder first" } else { "" };
+            Error::new(format!("{}: {}{}", path.display(), io_message(&e), hint))
+        })
     }
 
     /// The speech as a complete WAV file in memory: 16-bit PCM, mono, 24 kHz. Its metadata carries an AI-generated marker.

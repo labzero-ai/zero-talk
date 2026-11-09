@@ -122,6 +122,8 @@ test('save() writes .wav and .ogg files and names the fix for other names', asyn
     const ogg = await readFile(join(folder, 'hello.OGG'));
     assert.equal(ogg.subarray(0, 4).toString('latin1'), 'OggS');
     await assert.rejects(audio.save(join(folder, 'hello.mp3')), /save\(\) writes \.wav \(WAV\) or \.ogg \(Ogg Opus\); name the file with one of those extensions/);
+    const missing = join(folder, 'missing', 'hello.wav');
+    await assert.rejects(audio.save(missing), (error) => error.message.includes(missing) && /create the folder first/.test(error.message));
   } finally {
     await rm(folder, { recursive: true, force: true });
   }

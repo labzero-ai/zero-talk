@@ -1,0 +1,49 @@
+# Speed and memory of the zero-talk command on each kind of runner, for the performance table in the READMEs.
+# Manual only: Actions -> bench -> Run workflow. Read the numbers from each job's summary. Nothing here publishes.
+name: bench
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  bench:
+    name: bench (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025, macos-26, macos-26-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Build the command
+        run: cargo build --release --manifest-path rust/Cargo.toml -p zero-talk
+      - name: Read bench/text.txt three times and report the speed and the peak memory
+        run: |
+          bin=rust/target/release/zero-talk
+          {
+            echo "### ${{ matrix.os }}"
+            echo '```'
+            case "$RUNNER_OS" in
+              macOS) sysctl -n machdep.cpu.brand_string; sysctl -n hw.ncpu | sed 's/$/ cores/'; sysctl -n hw.memsize | awk '{printf "%.0f GB memory\n", $1/2^30}' ;;
+              Linux) grep -m1 'model name' /proc/cpuinfo || uname -m; nproc | sed 's/$/ cores/'; awk '/MemTotal/ {printf "%.0f GB memory\n", $2/2^20}' /proc/meminfo ;;
+              Windows) echo "$PROCESSOR_IDENTIFIER"; echo "$NUMBER_OF_PROCESSORS cores" ;;
+            esac
+            for i in 1 2 3; do
+              case "$RUNNER_OS" in
+                macOS) /usr/bin/time -l "$bin" --file bench/text.txt -o out.wav 2>&1 | grep -E 'faster than real time|maximum resident' ;;
+                Linux) /usr/bin/time -v "$bin" --file bench/text.txt -o out.wav 2>&1 | grep -E 'faster than real time|Maximum resident' ;;
+                Windows) "$bin" --file bench/text.txt -o out.wav 2>&1 | grep -E 'faster than real time' ;;
+              esac
+            done
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"

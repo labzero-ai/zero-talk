@@ -97,6 +97,14 @@ fn unreadable_words_are_left_out_with_a_warning() {
 }
 
 #[test]
+fn save_into_a_missing_folder_names_the_file_and_the_fix() {
+    let audio = Voice::load(ID).unwrap().speak("Hello.").unwrap();
+    let path = std::env::temp_dir().join("zero-talk-missing-folder").join("nested").join("hello.wav");
+    let message = audio.save(&path).unwrap_err().to_string();
+    assert!(message.contains(&path.display().to_string()) && message.contains("create the folder first"), "{message}");
+}
+
+#[test]
 fn steering_tags_are_left_out_with_a_warning() {
     let voice = Voice::load(ID).unwrap();
     let tagged = voice.speak("[M2] Hello.").unwrap();

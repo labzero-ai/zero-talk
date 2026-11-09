@@ -129,6 +129,15 @@ class SpeechTests(unittest.TestCase):
                 digest = hashlib.sha256(self.voice.speak(text).to_wav()).hexdigest()
                 self.assertEqual(digest, expected)
 
+    def test_save_into_a_missing_folder_names_the_file_and_the_fix(self):
+        audio = self.voice.speak("Hello.")
+        with tempfile.TemporaryDirectory() as folder:
+            target = os.path.join(folder, "missing", "hello.wav")
+            with self.assertRaises(FileNotFoundError) as caught:
+                audio.save(target)
+            self.assertIn(target, str(caught.exception))
+            self.assertIn("create the folder first", str(caught.exception))
+
     def test_steering_tags_are_removed_with_a_warning(self):
         tagged = self.voice.speak("[M2] Hello.")
         self.assertEqual(len(tagged.warnings), 1)

@@ -40,7 +40,12 @@ export async function loadVoice(id, options = {}) {
 }
 
 async function saveInNode(path, bytes) {
-  await writeFile(path, bytes);
+  try {
+    await writeFile(path, bytes);
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw new Error(`${path}: No such file or directory; create the folder first`, { cause: error });
+    throw error;
+  }
 }
 
 async function playInNode() {
