@@ -28,7 +28,13 @@ export interface LoadOptions {
    * Where the three files (engine.wasm, model.bin, frontend.bin) are, instead of the package's own folder. In a browser, a URL of the
    * folder. In Node.js, a folder path, a file: URL or an http(s) URL of the folder.
    */
-  baseUrl?: string | URL;
+  modelDir?: string | URL;
+  /**
+   * The address of each file on its own, for hosting that cannot follow the folder layout (hashed file names, another origin for the
+   * .wasm). A file named here wins over modelDir. In a browser, a URL (relative to the page); in Node.js, a path, a file: URL or an http(s)
+   * URL. A server on another origin must send an Access-Control-Allow-Origin header.
+   */
+  files?: { engine?: string | URL; model?: string | URL; frontend?: string | URL };
 }
 
 /** One piece of audio from voice.stream(). */

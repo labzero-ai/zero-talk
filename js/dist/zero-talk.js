@@ -1,6 +1,6 @@
 // Zero Talk 11M in a browser. Import this module from the package with a bundler, or with a script tag from a CDN: it starts the engine
-// in a module worker and reads the three model files beside this module (or from baseUrl). Nothing is sent over the network at run time.
-import { Channel, checkLoad, createVoice, VOICE_IDS } from './voice.js';
+// in a module worker and reads the three model files beside this module (or from modelDir or files). Nothing is sent over the network at run time.
+import { Channel, chooseAddresses, checkLoad, createVoice, VOICE_IDS } from './voice.js';
 import { playStream } from './play.js';
 
 export const voices = VOICE_IDS;
@@ -8,12 +8,12 @@ export const voices = VOICE_IDS;
 /**
  * Loads a voice. Resolves with a voice once the engine and the files are ready.
  * @param {string} id 'labzero-ai/zero-talk-11m'
- * @param {{ engine?: 'auto' | 'gpu' | 'wasm', baseUrl?: string | URL }} [options]
+ * @param {{ engine?: 'auto' | 'gpu' | 'wasm', modelDir?: string | URL, files?: { engine?: string | URL, model?: string | URL, frontend?: string | URL } }} [options]
  * @returns {Promise<import('../index.d.ts').Voice>}
  */
 export async function loadVoice(id, options = {}) {
   const engine = checkLoad(id, options);
-  const urls = fileUrls(options.baseUrl);
+  const urls = fileUrls(options);
   const { worker, blobUrl } = startWorker();
   const channel = new Channel({
     send: (message, transfer) => worker.postMessage(message, transfer),
@@ -39,19 +39,22 @@ async function saveInBrowser() {
   throw new Error("save() writes files in Node.js. In a browser, get the bytes with await audio.encode('ogg') and offer them as a download.");
 }
 
-// The files' addresses: beside this module by default, or in baseUrl (a folder, with or without its trailing slash).
+// The files' addresses (as strings): beside this module by default, in options.modelDir (a folder, with or without its trailing slash)
+// or each at its own address in options.files. Relative addresses are relative to the page.
 const FILE_NAMES = ['engine.wasm', 'model.bin', 'frontend.bin'];
-function fileUrls(baseUrl) {
-  if (baseUrl == null) {
-    return {
-      'engine.wasm': new URL('./engine.wasm', import.meta.url).href,
-      'model.bin': new URL('./model.bin', import.meta.url).href,
-      'frontend.bin': new URL('./frontend.bin', import.meta.url).href,
-    };
-  }
-  const base = new URL(baseUrl, location.href);
-  if (!base.pathname.endsWith('/')) base.pathname += '/';
-  return Object.fromEntries(FILE_NAMES.map((name) => [name, new URL(name, base).href]));
+function fileUrls(options) {
+  const beside = {
+    'engine.wasm': new URL('./engine.wasm', import.meta.url),
+    'model.bin': new URL('./model.bin', import.meta.url),
+    'frontend.bin': new URL('./frontend.bin', import.meta.url),
+  };
+  const folder = (value) => {
+    const url = new URL(value, location.href);
+    if (!url.pathname.endsWith('/')) url.pathname += '/';
+    return url;
+  };
+  const addresses = chooseAddresses(options, beside, { folder, file: (value) => new URL(value, location.href) });
+  return Object.fromEntries(FILE_NAMES.map((name) => [name, addresses[name].href]));
 }
 
 // The engine worker. A module worker must come from the page's own origin. When this module is served from another origin (a CDN), the

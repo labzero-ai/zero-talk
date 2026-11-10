@@ -24,16 +24,43 @@ function checkEncode(format, options) {
   return bitrate;
 }
 
+// The three files a voice needs, by the key of the `files` option and by file name.
+export const FILE_KEYS = Object.freeze({ engine: 'engine.wasm', model: 'model.bin', frontend: 'frontend.bin' });
+const LOAD_OPTIONS = ['engine', 'modelDir', 'files'];
+
 // Checks the arguments of loadVoice and returns the engine name. Errors name the valid choices.
 export function checkLoad(id, options) {
   if (!VOICE_IDS.includes(id)) {
     throw new Error(`Unknown voice '${id}'. The valid ids are: ${VOICE_IDS.join(', ')}.`);
+  }
+  if (options === null || typeof options !== 'object') throw new Error('loadVoice takes options as an object, for example { engine: \'wasm\' }.');
+  for (const key of Object.keys(options)) {
+    if (!LOAD_OPTIONS.includes(key)) throw new Error(`Unknown option '${key}'. The options are: ${LOAD_OPTIONS.join(', ')}.`);
+  }
+  if (options.files != null) {
+    if (typeof options.files !== 'object') throw new Error(`files must be an object with the keys ${Object.keys(FILE_KEYS).join(', ')}, not ${typeof options.files}.`);
+    for (const key of Object.keys(options.files)) {
+      if (!(key in FILE_KEYS)) throw new Error(`Unknown file '${key}' in files. The names are: ${Object.keys(FILE_KEYS).join(', ')}.`);
+    }
   }
   const engine = options.engine ?? 'auto';
   if (!ENGINE_NAMES.includes(engine)) {
     throw new Error(`engine must be 'auto', 'gpu' or 'wasm', not '${engine}'.`);
   }
   return engine;
+}
+
+// Where each file is. `beside` holds the addresses of the files beside the package (the entry writes them as literal `new URL(...)`
+// expressions, which bundlers rewrite), `folder` makes the address of a folder (modelDir) and `file` that of one file. A file named in
+// options.files wins over modelDir, and modelDir over the package's own files.
+export function chooseAddresses(options, beside, { folder, file }) {
+  const base = options.modelDir == null ? null : folder(options.modelDir);
+  const out = {};
+  for (const [key, name] of Object.entries(FILE_KEYS)) {
+    if (options.files?.[key] != null) out[name] = file(options.files[key]);
+    else out[name] = base ? new URL(name, base) : beside[name];
+  }
+  return out;
 }
 
 // Requests to the engine worker. Each request has an id; the worker's chunk and restart messages go to its onChunk, its reply

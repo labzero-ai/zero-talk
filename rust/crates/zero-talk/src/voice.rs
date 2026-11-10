@@ -47,6 +47,14 @@ pub struct Voice {
     seed: u32,
 }
 
+/// An identifier other than the one voice is an error that lists the valid ones.
+fn check_id(id: &str) -> Result<()> {
+    if id != ZERO_TALK_11M {
+        return Err(Error::new(format!("no voice named '{id}'; the voices are: {}", voices().join(", "))));
+    }
+    Ok(())
+}
+
 impl Voice {
     /// Loads a voice by its identifier. The only identifier is `"labzero-ai/zero-talk-11m"` (see [`voices`]). The model is built
     /// into the crate by the default feature `embed`, so this needs no files on disk. An unknown identifier is an error that lists
@@ -57,10 +65,26 @@ impl Voice {
     /// # Ok::<(), zero_talk::Error>(())
     /// ```
     pub fn load(id: &str) -> Result<Voice> {
-        if id != ZERO_TALK_11M {
-            return Err(Error::new(format!("no voice named '{id}'; the voices are: {}", voices().join(", "))));
-        }
+        check_id(id)?;
         Voice::open(None, None)
+    }
+
+    /// Loads a voice by its identifier from a folder that holds `model.bin` and `frontend.bin`, the files of Zero Talk 11M (the
+    /// `data` folder of the `zero-talk-model-11m` crate). This works without the `embed` feature. A missing file is an error that
+    /// names it.
+    pub fn load_from_dir(id: &str, dir: impl AsRef<Path>) -> Result<Voice> {
+        check_id(id)?;
+        let dir = dir.as_ref();
+        let (model, frontend) = (dir.join("model.bin"), dir.join("frontend.bin"));
+        for file in [&model, &frontend] {
+            if !file.is_file() {
+                return Err(Error::new(format!(
+                    "{}: not found; the folder must hold model.bin and frontend.bin (the data folder of the zero-talk-model-11m crate)",
+                    file.display()
+                )));
+            }
+        }
+        Voice::open(Some(&model), Some(&frontend))
     }
 
     /// Loads a voice from model files on disk: `model` is the model file and `frontend` the text front-end file. Both are the
@@ -187,7 +211,7 @@ fn embedded(which: Embedded) -> Result<Archive<'static>> {
 #[cfg(not(feature = "embed"))]
 fn embedded(_which: Embedded) -> Result<Archive<'static>> {
     Err(Error::new(
-        "this build has no model inside (the default feature `embed` is off): give the model and front-end files with Voice::from_files",
+        "this build has no model inside (the default feature `embed` is off): give the folder that holds the model and front-end files with Voice::load_from_dir, or the two files with Voice::from_files",
     ))
 }
 

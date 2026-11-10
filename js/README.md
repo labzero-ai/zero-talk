@@ -60,7 +60,7 @@ audio as a file, call `speak()` and `save()`: the audio is the same.
 
 | Call | Returns |
 | --- | --- |
-| `loadVoice(id, { engine?, baseUrl? })` | `Promise<Voice>`. `id` is `'labzero-ai/zero-talk-11m'`, the only voice in this version; `voices` lists them. |
+| `loadVoice(id, { engine?, modelDir?, files? })` | `Promise<Voice>`. `id` is `'labzero-ai/zero-talk-11m'`, the only voice in this version; `voices` lists them. `modelDir` and `files` say where the model files are (see below). |
 | `voice.speak(text)` | `Promise<Audio>`: `samples`, `sampleRate`, `seconds`, `warnings`, `save(path)` (Node.js), `encode(format, { bitrate? })` (a promise of bytes; `format` is `'wav'` or `'ogg'`), `play()` (browser) |
 | `voice.stream(text)` | async iterable of `{ samples, restart? }` chunks |
 | `voice.play(text)` | `Promise<void>`, resolves when playback ends (browser) |
@@ -96,7 +96,7 @@ end (`frontend.bin`). Nothing is fetched from anywhere else, and nothing is down
   into your build and your own server serves them. The browser fetches them on the first `loadVoice()`; its normal HTTP
   cache keeps them if your server sends long cache headers. webpack 5 understands the same pattern but is untested.
 - **With esbuild or Rollup**: serve the package's complete `dist/` folder and import `dist/zero-talk.js` directly, as in
-  the example below, or configure your build to copy its worker modules and model files. `baseUrl` changes where model
+  the example below, or configure your build to copy its worker modules and model files. `modelDir` and `files` change where model
   files load from; worker modules still load beside the JavaScript entry.
 - **Node.js**: read from `node_modules`, no network. Runs on the CPU (WebAssembly) in a worker thread.
 - **Without a bundler**, in any web page:
@@ -114,8 +114,13 @@ end (`frontend.bin`). Nothing is fetched from anywhere else, and nothing is down
 
   jsDelivr serves the published package unchanged, and the exact version in the link keeps it that way. To avoid any
   third party, copy the package's `dist/` folder to your own server and import it from there.
-- **From your own folder or CDN**: `loadVoice('labzero-ai/zero-talk-11m', { baseUrl: 'https://example.com/zero-talk/' })`
-  reads the same three files from there.
+- **From your own folder or CDN**: `loadVoice('labzero-ai/zero-talk-11m', { modelDir: 'https://example.com/zero-talk/' })`
+  reads `engine.wasm`, `model.bin` and `frontend.bin` from that folder (relative addresses are relative to the page; in Node.js a
+  path, a `file:` URL or an `http(s)` URL).
+- **Each file at its own address**, for hosting that cannot follow the folder layout (hashed file names, another origin for the
+  `.wasm`): `loadVoice('labzero-ai/zero-talk-11m', { files: { engine: '/a/engine.3fa9.wasm', model: '/b/weights.bin', frontend: '/b/frontend.bin' } })`.
+  A file named in `files` wins over `modelDir`, and `modelDir` over the package's own files. A server on another origin must send
+  an `Access-Control-Allow-Origin` header; if it does not, the error says so and names the address.
 
 Every file's size and SHA-256 are in the package's `model.json`, the same as on the model page.
 
@@ -188,7 +193,8 @@ is shown; quoted texts are exact.
 | GPU memory (`engine: 'gpu'`) | About 34–37 MB of GPU buffers for any text length. On a slow GPU the engine switches to a larger window after two slow requests and then uses about 43–46 MB. |
 | Unknown voice ID | `Unknown voice 'labzero-ai/unknown'. The valid ids are: labzero-ai/zero-talk-11m.` |
 | Unknown `engine` | `engine must be 'auto', 'gpu' or 'wasm', not 'cpu'.` With `engine: 'gpu'` in Node.js: `loadVoice: engine 'gpu' needs WebGPU, which only browsers have. Use engine 'auto' or 'wasm' in Node.js.` |
-| `baseUrl` folder without the files | Node.js's own error, for example `ENOENT: no such file or directory, open '<folder>/engine.wasm'`. |
+| `modelDir` folder without the files (Node.js) | `engine.wasm not found at <folder>/engine.wasm; modelDir must be a folder that holds engine.wasm, model.bin and frontend.bin, or files must name each file`. In a browser a missing file is `<url>: HTTP 404; modelDir must be …`. |
+| Unknown option or file key | `Unknown option 'baseUrl'. The options are: engine, modelDir, files.`; `Unknown file 'wasm' in files. The names are: engine, model, frontend.` |
 | Text that is not a string | `TypeError: text must be a string, not number.` |
 | `save()` with another extension (`.mp3`, none) | `<path>: save() writes .wav (WAV) or .ogg (Ogg Opus); name the file with one of those extensions`. Nothing is written. `.WAV` in capitals works. |
 | `encode()` with another format, a bit rate outside 8 to 128, or a bit rate for `'wav'` | `format must be 'wav' or 'ogg', not 'mp3'.`; `bitrate must be a whole number of kbit/s from 8 to 128, not 999.`; `bitrate is for 'ogg'; 'wav' has no bit rate.`; an unknown option: `encode: unknown option 'kbps'; the only option is bitrate (kbit/s, for 'ogg').` |

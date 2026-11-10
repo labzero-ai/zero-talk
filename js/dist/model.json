@@ -118,9 +118,8 @@
   "files": [
     {
       "name": "engine.wasm",
-      "url": "https://labzero.ai/zero-talk-11m/engine.wasm",
       "bytes": 1133064,
-      "sha256": "4d63c51858a671e3381e518e64fbdd732471b7c8118c4e84baecab7f46f083b4"
+      "sha256": "ae901fed5be37376d1aafcfc9a5f74d1131fcf2f21fed72ab81c3e37c0d028ea"
     },
     {
       "name": "model.bin",

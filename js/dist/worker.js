@@ -83,8 +83,13 @@ function withF32(arrays, fn) {
 // header is the size of the body) and each part is copied in as it arrives, so the bytes are copied once. Without a size, or with a wrong
 // one, the array grows (and it is cut to the bytes read): the same bytes either way.
 async function fetchBytes(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (error) {
+    throw new Error(`${url} could not be fetched (${error.message}). If it is on another origin, that server must send an Access-Control-Allow-Origin header; check the address in modelDir or files`, { cause: error });
+  }
+  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}; modelDir must be a folder that holds engine.wasm, model.bin and frontend.bin, or files must name each file`);
   const reader = res.body.getReader();
   const size = res.headers.get('content-encoding') ? 0 : Number(res.headers.get('content-length'));
   let out = new Uint8Array(Number.isInteger(size) && size > 0 ? size : 0), at = 0;

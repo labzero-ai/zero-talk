@@ -132,6 +132,18 @@ fn files_give_the_same_voice_as_the_built_in_one() {
 }
 
 #[test]
+fn load_from_dir_gives_the_same_voice_and_names_a_missing_file() {
+    let data = model_files("from-dir");
+    let from_dir = Voice::load_from_dir(ID, &data).expect("the folder loads");
+    assert!(from_dir.speak("Hello.").unwrap().samples() == Voice::load(ID).unwrap().speak("Hello.").unwrap().samples());
+    std::fs::remove_file(data.join("frontend.bin")).unwrap();
+    let message = Voice::load_from_dir(ID, &data).err().unwrap().to_string();
+    assert!(message.contains("frontend.bin: not found; the folder must hold model.bin and frontend.bin"), "{message}");
+    assert!(Voice::load_from_dir("labzero-ai/unknown", &data).err().unwrap().to_string().contains("the voices are: labzero-ai/zero-talk-11m"));
+    std::fs::remove_dir_all(&data).ok();
+}
+
+#[test]
 fn a_file_of_the_wrong_kind_is_an_error() {
     let data = model_files("wrong-kind");
     let swapped = Voice::from_files(data.join("frontend.bin"), data.join("model.bin"));

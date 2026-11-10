@@ -77,6 +77,29 @@ test('steering tags are dropped from the speech and named in the warnings', asyn
   assert.match(tagged.warnings[0], /steering is not supported.*\[M2\]/);
 });
 
+test('modelDir and files say where the three files are, and a wrong call names the fix', async () => {
+  const { mkdtemp, copyFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const folder = await mkdtemp(join(tmpdir(), 'zero-talk-files-'));
+  const dist = new URL('../dist/', import.meta.url);
+  try {
+    const expected = (await voice.speak(HELLO)).samples;
+    for (const name of ['engine.wasm', 'model.bin', 'frontend.bin']) await copyFile(new URL(name, dist), join(folder, name));
+    const fromFolder = await loadVoice('labzero-ai/zero-talk-11m', { modelDir: folder });
+    assert.deepEqual((await fromFolder.speak(HELLO)).samples, expected);
+    // each file at its own address and name; a file named in files wins over modelDir
+    await copyFile(new URL('model.bin', dist), join(folder, 'weights.bin'));
+    const named = await loadVoice('labzero-ai/zero-talk-11m', { modelDir: join(folder, 'missing'), files: { engine: join(folder, 'engine.wasm'), model: join(folder, 'weights.bin'), frontend: join(folder, 'frontend.bin') } });
+    assert.deepEqual((await named.speak(HELLO)).samples, expected);
+    await assert.rejects(loadVoice('labzero-ai/zero-talk-11m', { modelDir: join(folder, 'missing') }), /engine\.wasm not found at .*; modelDir must be a folder that holds engine\.wasm, model\.bin and frontend\.bin/);
+    await assert.rejects(loadVoice('labzero-ai/zero-talk-11m', { baseUrl: folder }), /Unknown option 'baseUrl'\. The options are: engine, modelDir, files\./);
+    await assert.rejects(loadVoice('labzero-ai/zero-talk-11m', { files: { wasm: 'x' } }), /Unknown file 'wasm' in files\. The names are: engine, model, frontend\./);
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+});
+
 test('a numeric date is read as a date', async () => {
   const numeric = await voice.speak('It was 1/2/2026.');
   const written = await voice.speak('It was January 2nd twenty twenty-six.');

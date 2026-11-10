@@ -57,7 +57,8 @@ fn main() -> zero_talk::Result<()> {
 | Call | Returns |
 | --- | --- |
 | `Voice::load(id)` | `Result<Voice>`. `id` is `"labzero-ai/zero-talk-11m"`, the only voice in this version; `zero_talk::voices()` lists them. Needs the default `embed` feature. |
-| `Voice::from_files(model, frontend)` | `Result<Voice>`, from model files on disk (works without `embed`) |
+| `Voice::load_from_dir(id, dir)` | `Result<Voice>`, from a folder that holds `model.bin` and `frontend.bin` (works without `embed`) |
+| `Voice::from_files(model, frontend)` | `Result<Voice>`, from the two files at any paths and names (works without `embed`) |
 | `voice.speak(text)` | `Result<Audio>`: `samples()`, `sample_rate()`, `seconds()`, `warnings()`, `save(path)`, `encode(Format::Wav)` or `encode(Format::Ogg { bitrate: 64 })` (bytes; `Format::OGG` is Ogg at 24 kbit/s, bit rates 8 to 128) |
 | `voice.stream(text)` | `Result<Stream>`: an iterator of `Result<Chunk>`, each with `samples()` |
 
@@ -92,13 +93,16 @@ ship your own copy instead:
 zero-talk = { version = "1", default-features = false }
 ```
 
-Without `embed`, `Voice::load` returns an error that says so; give the two files yourself. To get them from the crate:
+Without `embed`, `Voice::load` returns an error that says so; give the folder that holds the two files. To get them from the crate:
 
 ```rust
-std::fs::write("model.bin", zero_talk_model_11m::MODEL)?;       // add zero-talk-model-11m = "1" to Cargo.toml
-std::fs::write("frontend.bin", zero_talk_model_11m::FRONTEND)?;
-let voice = zero_talk::Voice::from_files("model.bin", "frontend.bin")?;
+std::fs::create_dir_all("voice")?;
+std::fs::write("voice/model.bin", zero_talk_model_11m::MODEL)?;       // add zero-talk-model-11m = "1" to Cargo.toml
+std::fs::write("voice/frontend.bin", zero_talk_model_11m::FRONTEND)?;
+let voice = zero_talk::Voice::load_from_dir("labzero-ai/zero-talk-11m", "voice")?;
 ```
+
+`Voice::from_files(model, frontend)` takes the two files at any paths and names instead.
 
 The same two files are in the Hugging Face repository `labzero-ai/zero-talk-11m` (https://huggingface.co/labzero-ai/zero-talk-11m).
 
@@ -170,6 +174,7 @@ Measured on 2026-11-06 with a release build of this crate. Quoted texts are exac
 | A whole number of more than 306 digits | Left out with no warning; a 307-digit number leaves only its full stop. |
 | Length | A text of 5,016 characters (96 sentences) and a text of 50,000 characters (8,908 words) speak in full, not truncated. The text is split into pieces of at most 510 phonemes (the units of sound the model reads); a longer sentence is split too, with no warning. |
 | Unknown voice ID | `Err`: `no voice named 'labzero-ai/unknown'; the voices are: labzero-ai/zero-talk-11m` |
+| `Voice::load_from_dir` with a file missing | `Err`: `<folder>/frontend.bin: not found; the folder must hold model.bin and frontend.bin (the data folder of the zero-talk-model-11m crate)` |
 | `Voice::from_files` with the files missing | `Err`: `<folder>/frontend.bin: No such file or directory` (the front-end file is opened first) |
 | `Voice::from_files` with a file of another kind | `Err`: `<folder>/model.bin: this is a 'frontend' file, not a model file` |
 | `save()` with another extension (`.mp3`, none) | `Err`: `<path>: save() writes .wav (WAV) or .ogg (Ogg Opus); name the file with one of those extensions`. Nothing is written. `.WAV` in capitals works. |
