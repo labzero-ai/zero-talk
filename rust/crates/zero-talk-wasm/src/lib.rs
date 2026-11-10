@@ -379,7 +379,7 @@ fn plan_text(frontend: &Frontend, vocab: &Vocab, voice_of: impl Fn(&[usize]) -> 
         }
     }
     if !plan.tags.is_empty() {
-        let _ = writeln!(info, "warning: steering is not supported in this build: removed {} tag(s) from the text: {}", plan.tags.len(), plan.tags.join(" "));
+        let _ = writeln!(info, "warning: steering is not supported: removed {} tag(s) from the text: {}", plan.tags.len(), plan.tags.join(" "));
     }
     if !plan.unread.is_empty() {
         let _ = writeln!(

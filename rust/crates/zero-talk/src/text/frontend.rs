@@ -22,7 +22,7 @@ pub struct Plan {
     pub chunks: Vec<Chunk>,
     /// Words that got no phonemes and are left out of the speech, in order of first appearance.
     pub unread: Vec<String>,
-    /// Steering tags (`[M2]`, `[breathy:1]`) that were removed from the text, in order. The open model has no steering.
+    /// Steering tags (`[M2]`, `[breathy:1]`) that were removed from the text, in order. Zero Talk 11M has no steering.
     pub tags: Vec<String>,
 }
 

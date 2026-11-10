@@ -154,7 +154,7 @@ impl Voice {
         let plan = self.frontend.plan(text);
         let mut warnings = Vec::new();
         if !plan.tags.is_empty() {
-            warnings.push(format!("steering is not supported in this build: removed {} tag(s) from the text: {}", plan.tags.len(), plan.tags.join(" ")));
+            warnings.push(format!("steering is not supported: removed {} tag(s) from the text: {}", plan.tags.len(), plan.tags.join(" ")));
         }
         if !plan.unread.is_empty() {
             warnings.push(format!("{} word(s) could not be read and are left out: {}", plan.unread.len(), plan.unread.join(" ")));

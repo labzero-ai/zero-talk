@@ -118,8 +118,8 @@
   "files": [
     {
       "name": "engine.wasm",
-      "bytes": 1133064,
-      "sha256": "ae901fed5be37376d1aafcfc9a5f74d1131fcf2f21fed72ab81c3e37c0d028ea"
+      "bytes": 1133056,
+      "sha256": "e625280850349c1bd7a1345b12e8aa69d59f25da17a05095a90d004e1c5b43d4"
     },
     {
       "name": "model.bin",
