@@ -115,7 +115,7 @@ end (`frontend.bin`). Nothing is fetched from anywhere else, and nothing is down
   jsDelivr serves the published package unchanged, and the exact version in the link keeps it that way. To avoid any
   third party, copy the package's `dist/` folder to your own server and import it from there.
 - **From your own folder or CDN**: `loadVoice('labzero-ai/zero-talk-11m', { baseUrl: 'https://example.com/zero-talk/' })`
-  reads the same three files and `files.json` from there.
+  reads the same three files from there.
 
 Every file's size and SHA-256 are in the package's `model.json`, the same as on the model page.
 

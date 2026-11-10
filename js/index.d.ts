@@ -26,7 +26,7 @@ export interface LoadOptions {
   engine?: 'auto' | 'gpu' | 'wasm';
   /**
    * Where the three files (engine.wasm, model.bin, frontend.bin) are, instead of the package's own folder. In a browser, a URL of the
-   * folder. In Node.js, a folder path, a file: URL or an http(s) URL of the folder. The folder's files.json is read from there too.
+   * folder. In Node.js, a folder path, a file: URL or an http(s) URL of the folder.
    */
   baseUrl?: string | URL;
 }

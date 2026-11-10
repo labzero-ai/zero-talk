@@ -57,7 +57,7 @@ jobs:
         run: |
           toolchain=$(sed -n 's/^TOOLCHAIN=//p' rust/crates/zero-talk-wasm/build.sh)
           rustup toolchain install "$toolchain" --profile minimal --target wasm32-unknown-unknown
-      - name: Rebuild js/dist/engine.wasm and compare it with the file, model.json and files.json
+      - name: Rebuild js/dist/engine.wasm and compare it with the file and model.json
         run: rust/crates/zero-talk-wasm/build.sh --check
 
   docs:

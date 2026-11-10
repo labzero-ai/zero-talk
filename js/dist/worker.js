@@ -5,13 +5,13 @@
 // fails, the whole pipeline runs in WebAssembly. A text's own error (no phonemes, too many tokens) is a reply error that leaves the GPU
 // engine in use.
 // Requests: {id, op: 'load', engine?, urls? | files?}. engine is 'auto' (the default), 'wasm' or 'gpu' (which fails instead of falling
-// back). urls maps each file name to an absolute URL to fetch; files maps each name to its bytes, and 'files.json' to its parsed sizes.
+// back). urls maps each file name to an absolute URL to fetch; files maps each name to its bytes.
 // {id, op: 'speak', text, format?, engine?, chunks?}. format 0 is WAV (the default), 1 is Ogg Opus, 2 is float32. chunks true asks for
 // {id, chunk, sentence} messages before the reply, one per window as the GPU makes it, and {id, restart: true} when a GPU speak failed and
 // is made again in WebAssembly (the consumer then drops the chunks it has).
 // {id, op: 'encode', samples, format, bitrate?}. The samples (a Float32Array) encoded by the engine's encoder as WAV, Ogg Opus (at bitrate
 // kbit/s, 24 when omitted) or float32.
-// Replies: {id, ...result} or {id, error}. While the files load: {progress: {bytes, total}}, with no id.
+// Replies: {id, ...result} or {id, error}.
 const SEED = 1729; // the engine's default seed
 const ENGINES = ['auto', 'wasm', 'gpu'];
 // The adaptation's threshold (verdict): a request whose median window time over its core's audio is above SLOW (0.25, four times real
@@ -79,12 +79,14 @@ function withF32(arrays, fn) {
   }
 }
 
-// The body of a file, as one array. The size from files.json is allocated first and each part is copied in as it arrives, so the bytes
-// are copied once. A size that is missing or wrong makes the array grow (and it is cut to the bytes read): the same bytes either way.
-async function fetchCounted(url, size, onBytes) {
+// The body of a file, as one array. The size from Content-Length is allocated first (when the response is not compressed, so that the
+// header is the size of the body) and each part is copied in as it arrives, so the bytes are copied once. Without a size, or with a wrong
+// one, the array grows (and it is cut to the bytes read): the same bytes either way.
+async function fetchBytes(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   const reader = res.body.getReader();
+  const size = res.headers.get('content-encoding') ? 0 : Number(res.headers.get('content-length'));
   let out = new Uint8Array(Number.isInteger(size) && size > 0 ? size : 0), at = 0;
   for (;;) {
     const { done, value } = await reader.read();
@@ -96,7 +98,6 @@ async function fetchCounted(url, size, onBytes) {
     }
     out.set(value, at);
     at += value.length;
-    onBytes(value.length);
   }
   return at === out.length ? out : out.slice(0, at);
 }
@@ -228,17 +229,10 @@ async function startGpu(useAcoustic) {
 // The files, the instance, and the engine: the GPU engine when it starts (engine 'auto' or 'gpu'), else the WebAssembly pipeline.
 async function load({ engine = 'auto', urls = null, files = null }) {
   if (!ENGINES.includes(engine)) throw new Error(`unknown engine '${engine}'`);
-  const sizes = files ? files['files.json'] : await fetchJson(urls['files.json']);
-  const total = sizes.total ?? 0;
-  let bytes = 0;
-  const onBytes = (n) => {
-    bytes += n;
-    self.postMessage({ progress: { bytes, total } });
-  };
   const names = ['engine.wasm', 'model.bin', 'frontend.bin'];
   const [wasm, model, frontend] = await Promise.all(names.map((name) => (files
     ? new Uint8Array(files[name])
-    : fetchCounted(urls[name], sizes.files?.[name], onBytes))));
+    : fetchBytes(urls[name]))));
   x = (await WebAssembly.instantiate(wasm, {})).instance.exports;
   modelBytes = model;
   frontendBytes = frontend;
@@ -255,13 +249,6 @@ async function load({ engine = 'auto', urls = null, files = null }) {
   if (!gen) ensureFull();
   return { bytes: wasm.byteLength + model.byteLength + frontend.byteLength, engine: gen ? 'gpu' : 'wasm', fallbackReason,
     acoustic: gen ? acousticStatus : 'off', acousticMemory: acoustic ? acoustic.memory() : null };
-}
-
-// A small JSON file (files.json), from its URL.
-async function fetchJson(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
-  return res.json();
 }
 
 // The WebAssembly engine: the whole text in one call (zt_speak).

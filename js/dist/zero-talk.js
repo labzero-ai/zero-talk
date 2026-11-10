@@ -36,18 +36,17 @@ export async function loadVoice(id, options = {}) {
 
 // A browser has no file system to write to: the bytes go to the page.
 async function saveInBrowser() {
-  throw new Error('save() writes files in Node.js. In a browser, get the bytes with await audio.encode('ogg') and offer them as a download.');
+  throw new Error("save() writes files in Node.js. In a browser, get the bytes with await audio.encode('ogg') and offer them as a download.");
 }
 
 // The files' addresses: beside this module by default, or in baseUrl (a folder, with or without its trailing slash).
-const FILE_NAMES = ['engine.wasm', 'model.bin', 'frontend.bin', 'files.json'];
+const FILE_NAMES = ['engine.wasm', 'model.bin', 'frontend.bin'];
 function fileUrls(baseUrl) {
   if (baseUrl == null) {
     return {
       'engine.wasm': new URL('./engine.wasm', import.meta.url).href,
       'model.bin': new URL('./model.bin', import.meta.url).href,
       'frontend.bin': new URL('./frontend.bin', import.meta.url).href,
-      'files.json': new URL('./files.json', import.meta.url).href,
     };
   }
   const base = new URL(baseUrl, location.href);

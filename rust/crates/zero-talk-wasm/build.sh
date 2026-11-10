@@ -3,9 +3,9 @@
 # same sources give the same bytes on any machine.
 #
 #   build.sh            builds, copies the file to js/dist/engine.wasm and writes its size and sha256 into js/dist/model.json
-#                       and js/dist/files.json (needs Node.js, which the npm package needs anyway)
+#                       (needs Node.js, which the npm package needs anyway)
 #   build.sh --check    builds into a temporary folder and fails unless the bytes equal js/dist/engine.wasm and match its
-#                       size and sha256 in model.json and files.json; changes nothing in the repository
+#                       size and sha256 in model.json; changes nothing in the repository
 #
 # Needs the toolchain named below with the wasm32-unknown-unknown target:
 #   rustup toolchain install 1.99.1 --profile minimal --target wasm32-unknown-unknown
@@ -54,11 +54,6 @@ const entry = model.files.find((f) => f.name === 'engine.wasm');
 entry.bytes = bytes;
 entry.sha256 = sum;
 fs.writeFileSync(`${dist}/model.json`, JSON.stringify(model, null, 2) + '\n');
-const files = JSON.parse(fs.readFileSync(`${dist}/files.json`, 'utf8'));
-files.files['engine.wasm'] = bytes;
-files.total = Object.values(files.files).reduce((a, b) => a + b, 0);
-const body = Object.entries(files.files).map(([k, v]) => `"${k}": ${v}`).join(', ');
-fs.writeFileSync(`${dist}/files.json`, `{"total": ${files.total}, "files": {${body}}}\n`);
 JS
     echo "engine.wasm: $bytes bytes, sha256 $sum"
     exit 0
@@ -69,14 +64,12 @@ node - "$DIST" "$bytes" "$sum" <<'JS' || fail=1
 const fs = require('node:fs');
 const [dist, bytes, sum] = [process.argv[2], Number(process.argv[3]), process.argv[4]];
 const model = JSON.parse(fs.readFileSync(`${dist}/model.json`, 'utf8')).files.find((f) => f.name === 'engine.wasm');
-const sizes = JSON.parse(fs.readFileSync(`${dist}/files.json`, 'utf8')).files['engine.wasm'];
 let bad = 0;
 const want = (what, got, expected) => {
     if (got !== expected) { console.error(`engine.wasm ${what}: built ${got}, recorded ${expected}`); bad = 1; }
 };
 want('bytes in model.json', bytes, model.bytes);
 want('sha256 in model.json', sum, model.sha256);
-want('bytes in files.json', bytes, sizes);
 process.exit(bad);
 JS
 if [ "$(sha256 "$DIST/engine.wasm")" != "$sum" ]; then

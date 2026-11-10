@@ -52,21 +52,20 @@ async function playInNode() {
   throw new Error('play() plays through a browser and does not work in Node.js. Write the audio to a file with audio.save("hello.wav").');
 }
 
-// The three model files, and files.json (their sizes), read as bytes.
-const FILE_NAMES = ['engine.wasm', 'model.bin', 'frontend.bin', 'files.json'];
+// The three model files, read as bytes.
+const FILE_NAMES = ['engine.wasm', 'model.bin', 'frontend.bin'];
 async function readFiles(baseUrl) {
   const addresses = baseUrl == null
     ? {
         'engine.wasm': new URL('./engine.wasm', import.meta.url),
         'model.bin': new URL('./model.bin', import.meta.url),
         'frontend.bin': new URL('./frontend.bin', import.meta.url),
-        'files.json': new URL('./files.json', import.meta.url),
       }
     : Object.fromEntries(FILE_NAMES.map((name) => [name, new URL(name, folderUrl(baseUrl))]));
   const files = {};
   for (const [name, url] of Object.entries(addresses)) {
     const bytes = await readBytes(url, name);
-    files[name] = name.endsWith('.json') ? JSON.parse(new TextDecoder().decode(bytes)) : bytes;
+    files[name] = bytes;
   }
   return files;
 }

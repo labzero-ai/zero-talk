@@ -21,7 +21,7 @@ Zero Talk 11M, an English text-to-speech model with about 11M parameters, and it
 - Speed and memory figures in the READMEs come from `bench/` (the `bench` workflow runs it on every kind of CI runner); re-measure for each
   minor version, because the check compares the version named in the figures' line.
 - `js/dist/engine.wasm`: `rust/crates/zero-talk-wasm/build.sh --check` rebuilds it with the pinned toolchain and compares it with the file and with
-  its size and sha256 in `model.json` and `files.json`. After a change to the engine, run `build.sh` (without `--check`) and commit the result.
+  its size and sha256 in `model.json`. After a change to the engine, run `build.sh` (without `--check`) and commit the result.
 
 CI (`.github/workflows/ci.yml`) runs them on Linux (x86-64, ARM), Windows and macOS. Releases: `RELEASING.md`.
 
