@@ -78,6 +78,56 @@ for path in readmes:
 if model["id"] != "labzero-ai/zero-talk-11m":
     fail("js/dist/model.json", f"id is {model['id']}")
 
+# 7. Parameters and the model file's size: counted from model.bin, never typed. One count (the voice is part of the weights),
+# never split, and "model file" is model.bin alone while "about 9 MB" is the whole download.
+import struct
+import zlib
+
+blob = (ROOT / "js/dist/model.bin").read_bytes()
+if struct.unpack_from("<I", blob, 8)[0] != zlib.crc32(blob[12:]):
+    fail("js/dist/model.bin", "checksum mismatch")
+pos = 16
+
+
+def u32():
+    global pos
+    pos += 4
+    return struct.unpack_from("<I", blob, pos - 4)[0]
+
+
+def skip_text():
+    global pos
+    length = u32()
+    pos += length
+
+
+for _ in range(u32()):
+    skip_text()
+    skip_text()
+weights = 0
+for _ in range(u32()):
+    skip_text()
+    code, ndim = blob[pos], blob[pos + 1]
+    pos += 2
+    count = 1
+    for _ in range(ndim):
+        count *= u32()
+    pos += 16 + (6 if code == 2 else 0)
+    if code != 4:
+        weights += count
+if model["parameters"].get("weights") != weights:
+    fail("js/dist/model.json", f"parameters.weights is {model['parameters'].get('weights')}, model.bin holds {weights}")
+for path in readmes:
+    body = read(path)
+    if re.search(r"10\.8M|94k|plus about", body):
+        fail(path, "splits the parameter count; say one count, the voice included (about 11M, or 10.6M stored weights)")
+    for found in re.findall(r"(\d+\.\d)M stored weights", body):
+        if found != f"{weights / 1e6:.1f}":
+            fail(path, f"says {found}M stored weights; model.bin holds {weights / 1e6:.1f}M")
+    for found in re.findall(r"model file (?:is|\()(\d+\.\d+)(?:&nbsp;| )MB", body):
+        if found != f"{len(blob) / 1e6:.2f}":
+            fail(path, f"says the model file is {found} MB; model.bin is {len(blob) / 1e6:.2f} MB")
+
 if problems:
     print("README facts out of date:", *problems, sep="\n  ")
     sys.exit(1)

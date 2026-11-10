@@ -15,8 +15,12 @@
   "voices": 1,
   "parameters": {
     "approximate": "11M",
-    "detail": "10.8M plus about 94k for the voice"
+    "counted": "stored weights of model.bin, the one voice included; not counted: the scale factors of the 4-bit and 8-bit coding",
+    "voice": "built into the weights; another voice would need a new model",
+    "weights": 10588059,
+    "scale_factors": 330368
   },
+  "size_note": "model.bin is the model. The whole download is model.bin plus engine.wasm and frontend.bin (sizes in files).",
   "audio": {
     "sample_rate_hz": 24000,
     "channels": 1,

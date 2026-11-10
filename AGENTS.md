@@ -15,7 +15,9 @@ Zero Talk 11M, an English text-to-speech model with about 11M parameters, and it
 - `python/`: `maturin develop --release`, then `python -m unittest discover -s tests`.
 - `js/`: `npm test`.
 - README facts: `python3 .github/scripts/check-docs.py` fails when a README disagrees with the code or the release set-up (CDN version
-  pin, install-line versions, wheel list, minimum versions, package size, model ID). Add a check each time a README fact goes stale.
+  pin, install-line versions, wheel list, minimum versions, package size, model ID, parameter count and model-file size counted from
+  `model.bin`). Add a check each time a README fact goes stale. Parameters are one count, the voice included, never split; "model
+  file" is `model.bin` alone and "about 9 MB" is the whole download.
 - Speed and memory figures in the READMEs come from `bench/` (the `bench` workflow runs it on every kind of CI runner); re-measure for each
   minor version, because the check compares the version named in the figures' line.
 - `js/dist/engine.wasm`: `rust/crates/zero-talk-wasm/build.sh --check` rebuilds it with the pinned toolchain and compares it with the file and with

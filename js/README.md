@@ -1,7 +1,7 @@
 # Zero Talk for JavaScript
 
 `@labzero-ai/zero-talk`: Zero Talk 11M, an English text-to-speech model with about 11M parameters, for browsers and
-Node.js 22 or later. The model ships inside the package (about 9 MB), so speech is made on your device: no speech server,
+Node.js 22 or later. The model ships inside the package (the model file is 7.05 MB; with the engine and the text front end, about 9 MB), so speech is made on your device: no speech server,
 no API key. Made for reading short English texts aloud where size and privacy matter. Not for long narration, other
 languages or imitating real people.
 

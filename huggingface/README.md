@@ -207,10 +207,10 @@ The specifications below describe the browser demo, as on the [model page](https
 
 | Specification | Value |
 | --- | --- |
-| Parameters | about 11M (10.8M, plus about 94k for the voice) |
-| Voice | English, one voice (Kokoro's af_heart) |
+| Parameters | about 11M (10.6M stored weights; the one voice is part of them) |
+| Voice | English, one voice (Kokoro's af_heart), built into the weights; another voice would need a new model |
 | Audio | 24 kHz, mono; the demo saves Ogg Opus |
-| Download | about 9 MB, fetched only when you tap |
+| Download | about 9 MB, fetched only when you tap: the model file (7.05 MB) plus the engine and the text front end |
 | Runs on | this device, in a background thread: WebGPU where the browser offers it on a secure page, otherwise WebAssembly. A GPU is not required. |
 | Tested in | Chromium on an Apple-silicon laptop and Safari 26 on an iPhone 17 Pro, with both engines. Other browsers and phones are untested. |
 | Licence | Apache-2.0, for the model files and the engine ([licence text](LICENSE) · [NOTICE](NOTICE)) |
