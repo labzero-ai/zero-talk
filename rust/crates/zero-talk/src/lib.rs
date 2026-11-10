@@ -44,7 +44,7 @@ mod play;
 #[doc(hidden)]
 pub mod cli;
 
-pub use audio::Audio;
+pub use audio::{Audio, Format};
 pub use error::{Error, Result};
 pub use stream::{Chunk, Stream};
 pub use voice::{voices, Voice};

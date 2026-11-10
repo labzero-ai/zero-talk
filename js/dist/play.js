@@ -8,7 +8,7 @@ let context = null;
 // the last chunk has finished playing.
 export async function playStream(chunks) {
   const Context = globalThis.AudioContext || globalThis.webkitAudioContext;
-  if (!Context) throw new Error('play() needs the Web Audio API, which this browser does not have. Use speak() and toWav() instead.');
+  if (!Context) throw new Error('play() needs the Web Audio API, which this browser does not have. Use speak() and encode() instead.');
   context ??= new Context({ sampleRate: SAMPLE_RATE });
   if (context.state === 'suspended') await context.resume();
   let sources = [];

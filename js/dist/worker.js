@@ -9,7 +9,8 @@
 // {id, op: 'speak', text, format?, engine?, chunks?}. format 0 is WAV (the default), 1 is Ogg Opus, 2 is float32. chunks true asks for
 // {id, chunk, sentence} messages before the reply, one per window as the GPU makes it, and {id, restart: true} when a GPU speak failed and
 // is made again in WebAssembly (the consumer then drops the chunks it has).
-// {id, op: 'encode', samples, format}. The samples (a Float32Array) encoded by the engine's encoder as WAV, Ogg Opus or float32.
+// {id, op: 'encode', samples, format, bitrate?}. The samples (a Float32Array) encoded by the engine's encoder as WAV, Ogg Opus (at bitrate
+// kbit/s, 24 when omitted) or float32.
 // Replies: {id, ...result} or {id, error}. While the files load: {progress: {bytes, total}}, with no id.
 const SEED = 1729; // the engine's default seed
 const ENGINES = ['auto', 'wasm', 'gpu'];
@@ -311,9 +312,9 @@ function limit(samples) {
 }
 
 // The samples as the engine encodes them (zt_encode: WAV, Ogg Opus or float32); the bytes are copied out.
-function encode(samples, format) {
+function encode(samples, format, bitrate = 0) {
   const m = putF32(samples);
-  const rc = x.zt_encode(m.ptr, samples.length, format);
+  const rc = x.zt_encode(m.ptr, samples.length, format, bitrate);
   const error = rc ? lastError() : '';
   x.zt_free(m.base, m.bytes);
   if (rc) throw new Error(error);
@@ -632,7 +633,7 @@ async function handle(m) {
       const r = await speak(m, send);
       send(r, [r.out.buffer]);
     } else if (m.op === 'encode') {
-      const r = encode(m.samples, m.format);
+      const r = encode(m.samples, m.format, m.bitrate);
       send(r, [r.out.buffer]);
     } else {
       throw new Error(`unknown request '${m.op}'`);

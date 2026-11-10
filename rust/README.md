@@ -58,7 +58,7 @@ fn main() -> zero_talk::Result<()> {
 | --- | --- |
 | `Voice::load(id)` | `Result<Voice>`. `id` is `"labzero-ai/zero-talk-11m"`, the only voice in this version; `zero_talk::voices()` lists them. Needs the default `embed` feature. |
 | `Voice::from_files(model, frontend)` | `Result<Voice>`, from model files on disk (works without `embed`) |
-| `voice.speak(text)` | `Result<Audio>`: `samples()`, `sample_rate()`, `seconds()`, `warnings()`, `save(path)`, `to_wav()`, `to_ogg()` |
+| `voice.speak(text)` | `Result<Audio>`: `samples()`, `sample_rate()`, `seconds()`, `warnings()`, `save(path)`, `encode(Format::Wav)` or `encode(Format::Ogg { bitrate: 64 })` (bytes; `Format::OGG` is Ogg at 24 kbit/s, bit rates 8 to 128) |
 | `voice.stream(text)` | `Result<Stream>`: an iterator of `Result<Chunk>`, each with `samples()` |
 
 ## Text it reads
@@ -137,7 +137,7 @@ no tempo or pause controls. Short, plain sentences work best. The full list is o
 Silent cases: most symbols and emoji are left out without a warning, whole numbers of more than 306 digits are dropped,
 and a lone `.` speaks as 0.29 s of audio.
 
-WAV and Ogg files from `to_wav()`, `to_ogg()`, `save()` and the command carry an AI-generated label in their metadata: a
+WAV and Ogg files from `encode()`, `save()` and the command carry an AI-generated label in their metadata: a
 comment in both and, in Ogg, the IPTC digital source type `trainedAlgorithmicMedia`. It is a label, not a watermark:
 re-encoding or stripping metadata removes it, and `audio.samples()` and `--format pcm` carry none.
 
@@ -173,6 +173,7 @@ Measured on 2026-11-06 with a release build of this crate. Quoted texts are exac
 | `Voice::from_files` with the files missing | `Err`: `<folder>/frontend.bin: No such file or directory` (the front-end file is opened first) |
 | `Voice::from_files` with a file of another kind | `Err`: `<folder>/model.bin: this is a 'frontend' file, not a model file` |
 | `save()` with another extension (`.mp3`, none) | `Err`: `<path>: save() writes .wav (WAV) or .ogg (Ogg Opus); name the file with one of those extensions`. Nothing is written. `.WAV` in capitals works. |
+| `encode(Format::Ogg { bitrate })` with a bit rate outside 8 to 128 | `Err`: `bitrate must be a whole number of kbit/s from 8 to 128, not 999` |
 | `save()` into a missing folder | `Err`: `<path>: No such file or directory; create the folder first` |
 | Command options | `zero-talk: --bitrate needs a whole number of kbit/s from 8 to 128, not '999'`; `zero-talk: x.mp3: the output file must end in .ogg (Ogg Opus) or .wav (WAV); MP3 is not built`; `--format` takes `ogg`, `wav` or `pcm`. |
 

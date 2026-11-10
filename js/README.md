@@ -32,12 +32,12 @@ without `"type": "module"`), use `const { loadVoice } = require('@labzero-ai/zer
 audio.samples        // Float32Array, mono, 24,000 samples per second, values from -1 to 1
 audio.sampleRate     // 24000
 audio.seconds
-audio.toWav()        // Uint8Array, a WAV file (synchronous)
-await audio.toOgg()  // Uint8Array, Ogg Opus (smaller; a promise)
+await audio.encode('wav')                    // Uint8Array, a WAV file
+await audio.encode('ogg', { bitrate: 64 })   // Uint8Array, Ogg Opus at 64 kbit/s (8 to 128; 24 when omitted)
 await audio.play()   // browser only
 ```
 
-In a browser there is no file system: `save()` rejects there. Use `toWav()` or `await audio.toOgg()` and offer the bytes as
+In a browser there is no file system: `save()` rejects there. Use `await audio.encode('ogg')` and offer the bytes as
 a download (a `Blob`).
 
 Play while it is still being made, or take it piece by piece:
@@ -61,7 +61,7 @@ audio as a file, call `speak()` and `save()`: the audio is the same.
 | Call | Returns |
 | --- | --- |
 | `loadVoice(id, { engine?, baseUrl? })` | `Promise<Voice>`. `id` is `'labzero-ai/zero-talk-11m'`, the only voice in this version; `voices` lists them. |
-| `voice.speak(text)` | `Promise<Audio>`: `samples`, `sampleRate`, `seconds`, `warnings`, `save(path)` (Node.js), `toWav()`, `toOgg()`, `play()` (browser) |
+| `voice.speak(text)` | `Promise<Audio>`: `samples`, `sampleRate`, `seconds`, `warnings`, `save(path)` (Node.js), `encode(format, { bitrate? })` (a promise of bytes; `format` is `'wav'` or `'ogg'`), `play()` (browser) |
 | `voice.stream(text)` | async iterable of `{ samples, restart? }` chunks |
 | `voice.play(text)` | `Promise<void>`, resolves when playback ends (browser) |
 | `voice.engine` | `'gpu'` or `'wasm'`, the engine in use |
@@ -149,7 +149,7 @@ no tempo or pause controls. Short, plain sentences work best. The full list is o
 Silent cases: most symbols and emoji are left out without a warning, whole numbers of more than 306 digits are dropped,
 and a lone `.` speaks as 0.29 s of audio.
 
-WAV and Ogg files from `toWav()`, `toOgg()` and `save()` carry an AI-generated label in their metadata: a comment in both
+WAV and Ogg files from `encode()` and `save()` carry an AI-generated label in their metadata: a comment in both
 and, in Ogg, the IPTC digital source type `trainedAlgorithmicMedia`. It is a label, not a watermark: re-encoding or stripping
 metadata removes it, and `audio.samples` carries none.
 
@@ -191,6 +191,7 @@ is shown; quoted texts are exact.
 | `baseUrl` folder without the files | Node.js's own error, for example `ENOENT: no such file or directory, open '<folder>/engine.wasm'`. |
 | Text that is not a string | `TypeError: text must be a string, not number.` |
 | `save()` with another extension (`.mp3`, none) | `<path>: save() writes .wav (WAV) or .ogg (Ogg Opus); name the file with one of those extensions`. Nothing is written. `.WAV` in capitals works. |
+| `encode()` with another format, a bit rate outside 8 to 128, or a bit rate for `'wav'` | `format must be 'wav' or 'ogg', not 'mp3'.`; `bitrate must be a whole number of kbit/s from 8 to 128, not 999.`; `bitrate is for 'ogg'; 'wav' has no bit rate.`; an unknown option: `encode: unknown option 'kbps'; the only option is bitrate (kbit/s, for 'ogg').` |
 | `save()` into a missing folder | `<path>: No such file or directory; create the folder first` |
 | `play()` in Node.js | `play() plays through a browser and does not work in Node.js. Write the audio to a file with audio.save("hello.ogg").` |
 

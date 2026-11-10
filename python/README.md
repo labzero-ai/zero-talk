@@ -33,8 +33,8 @@ Wheels exist for Python 3.9 and later on macOS (Apple silicon and Intel), Linux 
 audio.samples        # read-only float32 memoryview, mono, 24,000 samples per second, values from -1 to 1
 audio.sample_rate    # 24000
 audio.seconds
-audio.to_wav()       # bytes, a WAV file
-audio.to_ogg()       # bytes, Ogg Opus
+audio.encode("wav")  # bytes, a WAV file
+audio.encode("ogg", bitrate=64)   # bytes, Ogg Opus at 64 kbit/s (8 to 128; 24 when omitted)
 numpy.asarray(audio.samples)   # needs numpy (pip install numpy); no copy
 ```
 
@@ -56,7 +56,7 @@ To save a stream's audio as a file, call `speak()` and `save()`: the audio is th
 | Call | Returns |
 | --- | --- |
 | `zero_talk.load_voice(id, model_dir=None)` | `Voice`. `id` is `"labzero-ai/zero-talk-11m"`, the only voice in this version; `zero_talk.voices()` lists them. `model_dir` reads the files from a folder instead. |
-| `voice.speak(text)` | `Audio`: `samples`, `sample_rate`, `seconds`, `warnings`, `save(path)`, `to_wav()`, `to_ogg()` (bytes) |
+| `voice.speak(text)` | `Audio`: `samples`, `sample_rate`, `seconds`, `warnings`, `save(path)`, `encode(format, bitrate=None)` (bytes; `format` is `"wav"` or `"ogg"`) |
 | `voice.stream(text)` | iterator of chunks with `samples` |
 
 ## Text it reads
@@ -126,7 +126,7 @@ no tempo or pause controls. Short, plain sentences work best. The full list is o
 Silent cases: most symbols and emoji are left out without a warning, whole numbers of more than 306 digits are dropped,
 and a lone `.` speaks as 0.29 s of audio.
 
-WAV and Ogg files from `to_wav()`, `to_ogg()` and `save()` carry an AI-generated label in their metadata: a comment in both
+WAV and Ogg files from `encode()` and `save()` carry an AI-generated label in their metadata: a comment in both
 and, in Ogg, the IPTC digital source type `trainedAlgorithmicMedia`. It is a label, not a watermark: re-encoding or stripping
 metadata removes it, and `audio.samples` carries none.
 
@@ -158,6 +158,7 @@ Measured on 2026-11-06 with Python 3.12 and this package. Quoted texts are exact
 | `model_dir` without the model files | `FileNotFoundError: <folder>/model.bin: no such file; model_dir must hold model.bin and frontend.bin (zero_talk.model_info() gives their sizes and hashes)` |
 | `model_dir` with a file of another kind | `ValueError: <folder>/model.bin: this is a 'frontend' file, not a model file` |
 | `save()` with another extension (`.mp3`, none) | `ValueError: <path>: save() writes .wav (WAV) or .ogg (Ogg Opus); name the file with one of those extensions`. Nothing is written. `.WAV` in capitals works. |
+| `encode()` with another format, a bit rate outside 8 to 128, or a bit rate for `"wav"` | `ValueError: format must be 'wav' or 'ogg', not 'mp3'`; `ValueError: bitrate must be a whole number of kbit/s from 8 to 128, not 999`; `ValueError: bitrate is for 'ogg'; 'wav' has no bit rate` |
 | `save()` into a missing folder | `FileNotFoundError: <path>: No such file or directory; create the folder first` |
 | Text that is not a string | `TypeError: 'int' object is not an instance of 'str'` |
 

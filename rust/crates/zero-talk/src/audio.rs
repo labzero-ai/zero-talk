@@ -7,13 +7,31 @@ use crate::opus;
 use crate::pipeline::SAMPLE_RATE;
 use crate::wav;
 
+/// A file format for [`Audio::encode`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    /// 16-bit PCM WAV, mono, 24 kHz.
+    Wav,
+    /// Ogg Opus, mono, 24 kHz, at `bitrate` kbit/s (from 8 to 128; [`Format::OGG`] uses 24).
+    Ogg {
+        /// The bit rate in kbit/s.
+        bitrate: u32,
+    },
+}
+
+impl Format {
+    /// Ogg Opus at the default bit rate, 24 kbit/s.
+    pub const OGG: Format = Format::Ogg { bitrate: opus::DEFAULT_KBPS };
+}
+
 /// Speech as mono samples at 24 kHz, from [`Voice::speak`](crate::Voice::speak).
 ///
 /// ```no_run
 /// # fn main() -> zero_talk::Result<()> {
 /// let voice = zero_talk::Voice::load("labzero-ai/zero-talk-11m")?;
 /// let audio = voice.speak("Hello from a small voice.")?;
-/// audio.save("hello.wav")?; // the extension picks the format: .wav or .ogg (Ogg Opus)
+/// audio.save("hello.ogg")?; // the extension picks the format: .ogg (Ogg Opus) or .wav
+/// let bytes = audio.encode(zero_talk::Format::Ogg { bitrate: 64 })?; // the file's bytes, in memory
 /// # Ok(())
 /// # }
 /// ```
@@ -54,8 +72,8 @@ impl Audio {
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
         let bytes = match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
-            Some("wav") => self.to_wav()?,
-            Some("ogg") => self.to_ogg()?,
+            Some("wav") => self.encode(Format::Wav)?,
+            Some("ogg") => self.encode(Format::OGG)?,
             _ => {
                 return Err(Error::new(format!(
                     "{}: save() writes .wav (WAV) or .ogg (Ogg Opus); name the file with one of those extensions",
@@ -69,13 +87,21 @@ impl Audio {
         })
     }
 
-    /// The speech as a complete WAV file in memory: 16-bit PCM, mono, 24 kHz. Its metadata carries an AI-generated marker.
-    pub fn to_wav(&self) -> Result<Vec<u8>> {
-        Ok(wav::encode(&self.samples, SAMPLE_RATE))
-    }
-
-    /// The speech as a complete Ogg Opus file in memory, at 24 kbit/s, mono, 24 kHz. Its metadata carries an AI-generated marker.
-    pub fn to_ogg(&self) -> Result<Vec<u8>> {
-        opus::encode_ogg(&self.samples, SAMPLE_RATE, opus::DEFAULT_KBPS).map_err(Error::from)
+    /// The speech as a complete file in memory, in `format`: [`Format::Wav`] or [`Format::Ogg`] (see [`Format::OGG`] for the
+    /// default bit rate). Both carry an AI-generated marker in their metadata. An Ogg bit rate outside 8 to 128 kbit/s is an error.
+    pub fn encode(&self, format: Format) -> Result<Vec<u8>> {
+        match format {
+            Format::Wav => Ok(wav::encode(&self.samples, SAMPLE_RATE)),
+            Format::Ogg { bitrate } => {
+                if !opus::KBPS.contains(&bitrate) {
+                    return Err(Error::new(format!(
+                        "bitrate must be a whole number of kbit/s from {} to {}, not {bitrate}",
+                        opus::KBPS.start(),
+                        opus::KBPS.end()
+                    )));
+                }
+                opus::encode_ogg(&self.samples, SAMPLE_RATE, bitrate).map_err(Error::from)
+            }
+        }
     }
 }

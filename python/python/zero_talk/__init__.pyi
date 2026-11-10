@@ -4,7 +4,7 @@ The package is the compiled engine with the model inside. Nothing is downloaded 
 """
 
 import os
-from typing import Dict, List, Optional, TypedDict, Union, final, type_check_only
+from typing import Dict, List, Literal, Optional, TypedDict, Union, final, type_check_only
 
 _PathLike = Union[str, "os.PathLike[str]"]
 
@@ -51,7 +51,7 @@ def model_info(id: str) -> _ModelInfo:
 class Audio:
     """Speech from ``Voice.speak``: mono samples at 24 kHz, and the warnings about what was left out of the text.
 
-    Write it with ``save(path)``, or get the bytes with ``to_wav()`` or ``to_ogg()``.
+    Write it with ``save(path)``, or get the bytes with ``encode(format)``.
     """
 
     @property
@@ -79,11 +79,12 @@ class Audio:
         raises ``OSError``.
         """
 
-    def to_wav(self) -> bytes:
-        """Return the speech as a complete WAV file in memory: 16-bit PCM, mono, 24 kHz. Its metadata carries an AI-generated marker."""
+    def encode(self, format: Literal["wav", "ogg"], bitrate: Optional[int] = None) -> bytes:
+        """Return the speech as a complete file in memory: ``"wav"`` (16-bit PCM, mono, 24 kHz) or ``"ogg"`` (Ogg Opus, mono, 24 kHz).
 
-    def to_ogg(self) -> bytes:
-        """Return the speech as a complete Ogg Opus file in memory: 24 kbit/s, mono, 24 kHz. Its metadata carries an AI-generated marker."""
+        ``bitrate`` is the Ogg bit rate in kbit/s, from 8 to 128 (24 when omitted). Both formats carry an AI-generated marker in their
+        metadata. Another format, a bit rate outside the range, or a bit rate for ``"wav"`` raises ``ValueError``.
+        """
 
 @final
 class Chunk:

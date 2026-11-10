@@ -35,7 +35,7 @@ test('the CommonJS entry exposes the same API and loads the voice', async () => 
   const voice = await api.loadVoice(ID, { engine: 'wasm' });
   assert.equal(voice.engine, 'wasm');
   const audio = await voice.speak(HELLO);
-  assert.equal(sha256(audio.toWav()), WAV_SHA256[HELLO]);
+  assert.equal(sha256(await audio.encode('wav')), WAV_SHA256[HELLO]);
   await assert.rejects(api.loadVoice('labzero-ai/unknown'), /valid ids/);
 });
 
@@ -83,9 +83,9 @@ test('a numeric date is read as a date', async () => {
   assert.equal(numeric.samples.length, written.samples.length);
 });
 
-test('toWav() writes a 16-bit mono 24000 Hz WAV with an AI-generated marker', async () => {
+test("encode('wav') writes a 16-bit mono 24000 Hz WAV with an AI-generated marker", async () => {
   const audio = await voice.speak(HELLO);
-  const wav = audio.toWav();
+  const wav = await audio.encode('wav');
   assert.ok(wav instanceof Uint8Array);
   const view = new DataView(wav.buffer, wav.byteOffset, wav.byteLength);
   const text = (at, n) => Buffer.from(wav.subarray(at, at + n)).toString('latin1');
@@ -117,7 +117,7 @@ test('save() writes .wav and .ogg files and names the fix for other names', asyn
   try {
     const audio = await voice.speak(HELLO);
     await audio.save(join(folder, 'hello.wav'));
-    assert.deepEqual(new Uint8Array(await readFile(join(folder, 'hello.wav'))), audio.toWav());
+    assert.deepEqual(new Uint8Array(await readFile(join(folder, 'hello.wav'))), await audio.encode('wav'));
     await audio.save(join(folder, 'hello.OGG'));
     const ogg = await readFile(join(folder, 'hello.OGG'));
     assert.equal(ogg.subarray(0, 4).toString('latin1'), 'OggS');
@@ -129,16 +129,27 @@ test('save() writes .wav and .ogg files and names the fix for other names', asyn
   }
 });
 
-test('toWav() of "Hello." and of the dates sentence is the website engine\'s WAV, byte for byte', async () => {
+test("encode('wav') of \"Hello.\" and of the dates sentence is the website engine's WAV, byte for byte", async () => {
   for (const text of [HELLO, DATES]) {
     const audio = await voice.speak(text);
-    assert.equal(sha256(audio.toWav()), WAV_SHA256[text], `WAV of ${JSON.stringify(text)}`);
+    assert.equal(sha256(await audio.encode('wav')), WAV_SHA256[text], `WAV of ${JSON.stringify(text)}`);
   }
 });
 
-test('toOgg() writes an Ogg stream', async () => {
+test("encode('ogg') writes an Ogg stream at the bit rate asked for, and names the fix for a wrong call", async () => {
+  const audio = await voice.speak('Hello from a small voice.');
+  const [small, standard, large] = await Promise.all([8, 24, 128].map((bitrate) => audio.encode('ogg', { bitrate })));
+  assert.deepEqual(standard, await audio.encode('ogg'));
+  assert.ok(small.length < standard.length && standard.length < large.length);
+  await assert.rejects(audio.encode('ogg', { bitrate: 999 }), /bitrate must be a whole number of kbit\/s from 8 to 128, not 999/);
+  await assert.rejects(audio.encode('mp3'), /format must be 'wav' or 'ogg', not 'mp3'/);
+  await assert.rejects(audio.encode('wav', { bitrate: 24 }), /bitrate is for 'ogg'/);
+  await assert.rejects(audio.encode('ogg', { kbps: 24 }), /unknown option 'kbps'; the only option is bitrate/);
+});
+
+test("encode('ogg') writes an Ogg stream", async () => {
   const audio = await voice.speak(HELLO);
-  const ogg = await audio.toOgg();
+  const ogg = await audio.encode('ogg');
   assert.equal(Buffer.from(ogg.subarray(0, 4)).toString('latin1'), 'OggS');
 });
 

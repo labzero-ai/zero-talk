@@ -188,8 +188,8 @@ impl PyAudio {
     /// raises `OSError`.
     fn save(&self, py: Python<'_>, path: PathBuf) -> PyResult<()> {
         let bytes = match extension(&path).as_deref() {
-            Some("wav") => py.detach(|| self.inner.to_wav()),
-            Some("ogg") => py.detach(|| self.inner.to_ogg()),
+            Some("wav") => py.detach(|| self.inner.encode(zero_talk::Format::Wav)),
+            Some("ogg") => py.detach(|| self.inner.encode(zero_talk::Format::OGG)),
             _ => {
                 return Err(PyValueError::new_err(format!(
                     "{}: save() writes .wav (WAV) or .ogg (Ogg Opus); name the file with one of those extensions",
@@ -208,15 +208,19 @@ impl PyAudio {
         Ok(())
     }
 
-    /// The speech as a complete WAV file, in memory: 16-bit PCM, mono, 24 kHz. Its metadata carries an AI-generated marker.
-    fn to_wav<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-        let bytes = py.detach(|| self.inner.to_wav()).map_err(engine_error)?;
-        Ok(PyBytes::new(py, &bytes))
-    }
-
-    /// The speech as a complete Ogg Opus file, in memory: 24 kbit/s, mono, 24 kHz. Its metadata carries an AI-generated marker.
-    fn to_ogg<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-        let bytes = py.detach(|| self.inner.to_ogg()).map_err(engine_error)?;
+    /// The speech as a complete file in memory, as bytes: `format` is `"wav"` (16-bit PCM, mono, 24 kHz) or `"ogg"` (Ogg Opus, mono,
+    /// 24 kHz, at `bitrate` kbit/s from 8 to 128; 24 when omitted). Both carry an AI-generated marker in their metadata. Another
+    /// format, a bit rate outside the range, or a bit rate for `"wav"` raises `ValueError`.
+    #[pyo3(signature = (format, bitrate=None))]
+    fn encode<'py>(&self, py: Python<'py>, format: &str, bitrate: Option<i64>) -> PyResult<Bound<'py, PyBytes>> {
+        let format = match (format, bitrate) {
+            ("wav", None) => zero_talk::Format::Wav,
+            ("wav", Some(_)) => return Err(PyValueError::new_err("bitrate is for 'ogg'; 'wav' has no bit rate")),
+            ("ogg", None) => zero_talk::Format::OGG,
+            ("ogg", Some(kbps)) => zero_talk::Format::Ogg { bitrate: u32::try_from(kbps).unwrap_or(0) },
+            (other, _) => return Err(PyValueError::new_err(format!("format must be 'wav' or 'ogg', not '{other}'"))),
+        };
+        let bytes = py.detach(|| self.inner.encode(format)).map_err(engine_error)?;
         Ok(PyBytes::new(py, &bytes))
     }
 }

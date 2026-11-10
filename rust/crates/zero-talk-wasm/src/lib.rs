@@ -45,7 +45,8 @@
 //! - zt_unload_gpu(): drops everything the GPU path holds (zt_load_front's inputs, the student, the sentences, the sentence prepared), for a
 //!   caller that goes on in WebAssembly alone: zt_load then reads its model into the memory they leave.
 //! - zt_post_limit(ptr, count): the soft limiter in place on float32 samples at ptr.
-//! - zt_encode(ptr, count, format) -> 0, or -1: float32 samples at ptr encoded as zt_speak encodes its audio.
+//! - zt_encode(ptr, count, format, kbps) -> 0, or -1: float32 samples at ptr encoded as zt_speak encodes its audio; kbps is the Ogg Opus
+//!   bit rate (0: the default, 24).
 use std::cell::RefCell;
 use std::fmt::Write as _;
 
@@ -407,13 +408,13 @@ fn plan_text(frontend: &Frontend, vocab: &Vocab, voice_of: impl Fn(&[usize]) -> 
 }
 
 /// The last step of `zero-talk`: the audio's duration and its bytes in `format`.
-fn set_audio(st: &mut State, audio: &[f32], format: u32) -> Result<(), String> {
+fn set_audio(st: &mut State, audio: &[f32], format: u32, kbps: u32) -> Result<(), String> {
     st.duration = audio.len() as f64 / SAMPLE_RATE as f64;
     // The previous result is released first, so that its block can serve the new one (and the new one does not grow the memory beside it).
     st.out = Vec::new();
     st.out = match format {
         0 => wav::encode(audio, SAMPLE_RATE),
-        1 => opus::encode_ogg(audio, SAMPLE_RATE, opus::DEFAULT_KBPS)?,
+        1 => opus::encode_ogg(audio, SAMPLE_RATE, if kbps == 0 { opus::DEFAULT_KBPS } else { kbps })?,
         _ => {
             let mut out = Vec::with_capacity(4 * audio.len());
             audio.iter().for_each(|x| out.extend_from_slice(&x.to_le_bytes()));
@@ -436,7 +437,7 @@ fn speak_text(text: &str, seed: u32, format: u32) -> Result<(), String> {
             return Err("nothing to say: the text has no words the model can read; pass a sentence made of letters, for example \"Hello.\"".into());
         }
         let audio = speak(pipeline, Backend::Portable, sentences, seed)?;
-        set_audio(st, &audio, format)
+        set_audio(st, &audio, format, 0)
     })
 }
 
@@ -887,9 +888,9 @@ pub unsafe extern "C" fn zt_post_limit(ptr: *mut f32, count: usize) {
 /// # Safety
 /// `ptr` must address `count` float32 values (zt_alloc's blocks), or `count` must be 0.
 #[no_mangle]
-pub unsafe extern "C" fn zt_encode(ptr: *const f32, count: usize, format: u32) -> i32 {
+pub unsafe extern "C" fn zt_encode(ptr: *const f32, count: usize, format: u32, kbps: u32) -> i32 {
     let audio = floats(ptr, count);
-    outcome(check_format(format).and_then(|()| with(|st| set_audio(st, audio, format))))
+    outcome(check_format(format).and_then(|()| with(|st| set_audio(st, audio, format, kbps))))
 }
 
 #[no_mangle]

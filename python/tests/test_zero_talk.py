@@ -118,7 +118,7 @@ class SpeechTests(unittest.TestCase):
                     done = subprocess.run([exe, text, "-o", out], capture_output=True)
                     self.assertEqual(done.returncode, 0, done.stderr)
                     with open(out, "rb") as f:
-                        self.assertEqual(self.voice.speak(text).to_wav(), f.read())
+                        self.assertEqual(self.voice.speak(text).encode("wav"), f.read())
 
     @unittest.skipUnless(os.environ.get("ZERO_TALK_REFERENCE_HASHES") == "1",
                          "set ZERO_TALK_REFERENCE_HASHES=1 on the reference machine (macOS 15, Apple silicon); native audio "
@@ -126,7 +126,7 @@ class SpeechTests(unittest.TestCase):
     def test_wav_bytes_equal_the_reference(self):
         for text, expected in ENGINE_WAV_SHA256.items():
             with self.subTest(text=text):
-                digest = hashlib.sha256(self.voice.speak(text).to_wav()).hexdigest()
+                digest = hashlib.sha256(self.voice.speak(text).encode("wav")).hexdigest()
                 self.assertEqual(digest, expected)
 
     def test_save_into_a_missing_folder_names_the_file_and_the_fix(self):
@@ -145,22 +145,35 @@ class SpeechTests(unittest.TestCase):
         self.assertIn("[M2]", tagged.warnings[0])
         self.assertEqual(bytes(memoryview(tagged.samples)), bytes(memoryview(self.voice.speak("Hello.").samples)))
 
-    def test_to_wav_and_to_ogg_return_bytes(self):
+    def test_encode_returns_bytes(self):
         audio = self.voice.speak("Hello.")
-        wav = audio.to_wav()
-        ogg = audio.to_ogg()
+        wav = audio.encode("wav")
+        ogg = audio.encode("ogg")
         self.assertIsInstance(wav, bytes)
         self.assertEqual(wav[:4], b"RIFF")
         self.assertEqual(wav[8:12], b"WAVE")
         self.assertIsInstance(ogg, bytes)
         self.assertEqual(ogg[:4], b"OggS")
 
+    def test_encode_ogg_takes_a_bit_rate_and_names_the_fix_for_a_wrong_call(self):
+        audio = self.voice.speak("Hello from a small voice.")
+        small, default, large = (audio.encode("ogg", bitrate=kbps) for kbps in (8, 24, 128))
+        self.assertEqual(default, audio.encode("ogg"))
+        self.assertLess(len(small), len(default))
+        self.assertLess(len(default), len(large))
+        with self.assertRaisesRegex(ValueError, "bitrate must be a whole number of kbit/s from 8 to 128, not 999"):
+            audio.encode("ogg", bitrate=999)
+        with self.assertRaisesRegex(ValueError, "format must be 'wav' or 'ogg', not 'mp3'"):
+            audio.encode("mp3")
+        with self.assertRaisesRegex(ValueError, "bitrate is for 'ogg'"):
+            audio.encode("wav", bitrate=24)
+
     def test_wav_and_ogg_carry_the_ai_generated_marker(self):
         audio = self.voice.speak("Hello.")
-        wav = audio.to_wav()
+        wav = audio.encode("wav")
         self.assertEqual(wav[36:40], b"LIST")  # the marker is in the header, before the samples
         self.assertIn(MARKER_COMMENT.encode("ascii") + b"\0", wav)
-        ogg = audio.to_ogg()
+        ogg = audio.encode("ogg")
         self.assertIn(b"COMMENT=" + MARKER_COMMENT.encode("ascii"), ogg)
         self.assertIn(b"DIGITALSOURCETYPE=" + MARKER_SOURCE.encode("ascii"), ogg)
 
@@ -172,7 +185,7 @@ class SpeechTests(unittest.TestCase):
             audio.save(wav_path)
             audio.save(ogg_path)
             with open(wav_path, "rb") as f:
-                self.assertEqual(f.read(), audio.to_wav())
+                self.assertEqual(f.read(), audio.encode("wav"))
             with open(ogg_path, "rb") as f:
                 ogg_file = f.read()
             self.assertEqual(ogg_file[:4], b"OggS")
@@ -234,7 +247,7 @@ class ModelFolderTests(unittest.TestCase):
         for text in ENGINE_WAV_SHA256:
             with self.subTest(text=text):
                 self.assertEqual(float_bytes(from_folder.speak(text).samples), float_bytes(built_in.speak(text).samples))
-                self.assertEqual(from_folder.speak(text).to_wav(), built_in.speak(text).to_wav())
+                self.assertEqual(from_folder.speak(text).encode("wav"), built_in.speak(text).encode("wav"))
 
 
 class CommandTests(unittest.TestCase):

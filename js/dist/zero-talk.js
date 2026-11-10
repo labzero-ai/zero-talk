@@ -36,7 +36,7 @@ export async function loadVoice(id, options = {}) {
 
 // A browser has no file system to write to: the bytes go to the page.
 async function saveInBrowser() {
-  throw new Error('save() writes files in Node.js. In a browser, get the bytes with audio.toWav() or await audio.toOgg() and offer them as a download.');
+  throw new Error('save() writes files in Node.js. In a browser, get the bytes with await audio.encode('ogg') and offer them as a download.');
 }
 
 // The files' addresses: beside this module by default, or in baseUrl (a folder, with or without its trailing slash).

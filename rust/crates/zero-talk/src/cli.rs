@@ -281,11 +281,11 @@ fn command(args: Vec<String>) -> Result<(), Fail> {
     };
     let audio = Audio::new(samples, Vec::new());
     let (bytes, detail) = if ogg {
-        let bytes = audio.to_ogg()?;
+        let bytes = audio.encode(crate::audio::Format::Ogg { bitrate: a.bitrate.unwrap_or(opus::DEFAULT_KBPS) })?;
         let detail = format!(", Ogg Opus, {:.1} kbit/s on average, 24 kHz mono", bytes.len() as f64 * 8.0 / seconds / 1000.0);
         (bytes, detail)
     } else {
-        (audio.to_wav()?, ", 24 kHz mono 16-bit".to_string())
+        (audio.encode(crate::audio::Format::Wav)?, ", 24 kHz mono 16-bit".to_string())
     };
     std::fs::write(out, bytes).map_err(|e| Fail::Other(format!("{}: {}", out.display(), io_message(&e))))?;
     println!(

@@ -57,12 +57,12 @@ await audio.save('hello.ogg');   // Node.js: Ogg Opus, 1.8 s of speech in 5 KB; 
 audio.samples      // Float32Array, mono
 audio.sampleRate   // 24000
 audio.seconds
-audio.toWav()      // Uint8Array, a WAV file (synchronous)
-await audio.toOgg()  // Uint8Array, Ogg Opus (smaller; a promise)
+await audio.encode('wav')                    // Uint8Array, a WAV file
+await audio.encode('ogg', { bitrate: 64 })   // Uint8Array, Ogg Opus at 64 kbit/s (8 to 128; 24 when omitted)
 await audio.play()   // browser only
 ```
 
-In a browser there is no file system: `save()` rejects there. Use `toWav()` or `await audio.toOgg()` and offer the bytes
+In a browser there is no file system: `save()` rejects there. Use `await audio.encode('ogg')` and offer the bytes
 as a download.
 
 Play while it is still being made, or take it piece by piece:

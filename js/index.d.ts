@@ -7,7 +7,7 @@
  * const voice = await loadVoice('labzero-ai/zero-talk-11m');
  * const audio = await voice.speak('Hello from a small voice.');
  * audio.samples;      // Float32Array, mono, 24000 per second
- * audio.toWav();      // Uint8Array, a WAV file
+ * await audio.encode('ogg');   // Uint8Array, an Ogg Opus file
  * ```
  */
 
@@ -55,13 +55,15 @@ export interface Audio {
    * there are none.
    */
   readonly warnings: string[];
-  /** The audio as a 16-bit mono WAV file (24000 Hz), as bytes. Synchronous. */
-  toWav(): Uint8Array;
-  /** The audio as an Ogg Opus file, as bytes. Smaller than WAV. Made by the engine. */
-  toOgg(): Promise<Uint8Array>;
+  /**
+   * The audio as a file, as bytes: 'wav' is a 16-bit mono WAV (24000 Hz), 'ogg' is Ogg Opus (smaller; made by the engine) at
+   * options.bitrate kbit/s, a whole number from 8 to 128 (24 when omitted). Both carry an AI-generated marker in their metadata.
+   * Rejects for another format, a bit rate outside the range, or a bit rate for 'wav'.
+   */
+  encode(format: 'wav' | 'ogg', options?: { bitrate?: number }): Promise<Uint8Array>;
   /**
    * Writes the audio to a file and resolves when it is written: .wav is a 16-bit mono WAV, .ogg is Ogg Opus. Any other extension rejects
-   * and says so. Node.js only: in a browser this rejects; use toWav() or toOgg() and offer the bytes as a download.
+   * and says so. Node.js only: in a browser this rejects; use encode() and offer the bytes as a download.
    */
   save(path: string): Promise<void>;
   /** Plays the audio in a browser and resolves when it has ended. In Node.js this rejects: write the file with save() instead. */

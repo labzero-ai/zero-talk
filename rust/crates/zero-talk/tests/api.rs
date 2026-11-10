@@ -52,10 +52,10 @@ fn saves_wav_and_ogg_by_extension() {
     let wav = std::fs::read(dir.join("hello.wav")).unwrap();
     assert_eq!(&wav[..4], b"RIFF");
     assert_eq!(&wav[8..12], b"WAVE");
-    assert_eq!(wav, audio.to_wav().unwrap());
+    assert_eq!(wav, audio.encode(zero_talk::Format::Wav).unwrap());
     let ogg = std::fs::read(dir.join("hello.ogg")).unwrap();
     assert_eq!(&ogg[..4], b"OggS");
-    assert_eq!(ogg, audio.to_ogg().unwrap());
+    assert_eq!(ogg, audio.encode(zero_talk::Format::OGG).unwrap());
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -94,6 +94,16 @@ fn a_text_with_nothing_to_say_is_an_error() {
 fn unreadable_words_are_left_out_with_a_warning() {
     let audio = Voice::load(ID).unwrap().speak("Hello. 東京 is far.").unwrap();
     assert!(audio.warnings().iter().any(|w| w.contains("could not be read")), "{:?}", audio.warnings());
+}
+
+#[test]
+fn encode_ogg_takes_a_bit_rate_and_names_the_fix_for_a_wrong_one() {
+    let audio = Voice::load(ID).unwrap().speak("Hello from a small voice.").unwrap();
+    let [small, default, large] = [8, 24, 128].map(|k| audio.encode(zero_talk::Format::Ogg { bitrate: k }).unwrap());
+    assert_eq!(default, audio.encode(zero_talk::Format::OGG).unwrap());
+    assert!(small.len() < default.len() && default.len() < large.len());
+    let message = audio.encode(zero_talk::Format::Ogg { bitrate: 999 }).unwrap_err().to_string();
+    assert_eq!(message, "bitrate must be a whole number of kbit/s from 8 to 128, not 999");
 }
 
 #[test]

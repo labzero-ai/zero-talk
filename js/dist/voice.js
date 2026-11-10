@@ -6,6 +6,23 @@ export const ENGINE_NAMES = Object.freeze(['auto', 'gpu', 'wasm']);
 export const SAMPLE_RATE = 24000;
 const FORMAT_OGG = 1;      // the engine's formats (worker.js): 1 is Ogg Opus, 2 is float32
 const FORMAT_FLOAT32 = 2;
+const BITRATE = { min: 8, max: 128 }; // Ogg Opus kbit/s, as in the Python and Rust packages
+
+// Checks the arguments of encode() and returns the Ogg bit rate to ask the engine for (0: its default, 24).
+function checkEncode(format, options) {
+  if (format !== 'wav' && format !== 'ogg') throw new Error(`format must be 'wav' or 'ogg', not '${format}'.`);
+  if (options === null || typeof options !== 'object') throw new Error('encode() takes options as an object, for example { bitrate: 64 }.');
+  for (const key of Object.keys(options)) {
+    if (key !== 'bitrate') throw new Error(`encode: unknown option '${key}'; the only option is bitrate (kbit/s, for 'ogg').`);
+  }
+  const { bitrate } = options;
+  if (bitrate === undefined) return 0;
+  if (format === 'wav') throw new Error("bitrate is for 'ogg'; 'wav' has no bit rate.");
+  if (!Number.isInteger(bitrate) || bitrate < BITRATE.min || bitrate > BITRATE.max) {
+    throw new Error(`bitrate must be a whole number of kbit/s from ${BITRATE.min} to ${BITRATE.max}, not ${bitrate}.`);
+  }
+  return bitrate;
+}
 
 // Checks the arguments of loadVoice and returns the engine name. Errors name the valid choices.
 export function checkLoad(id, options) {
@@ -147,13 +164,12 @@ class SpeechAudio {
     this.#save = save;
   }
 
-  toWav() {
-    return encodeWav(this.samples);
-  }
-
-  async toOgg() {
+  // The speech as a complete file, as bytes: 'wav' (16-bit PCM) or 'ogg' (Ogg Opus, at options.bitrate kbit/s, 24 when omitted).
+  async encode(format, options = {}) {
+    const bitrate = checkEncode(format, options);
+    if (format === 'wav') return encodeWav(this.samples);
     const copy = this.samples.slice();
-    const reply = await this.#channel.request({ op: 'encode', samples: copy, format: FORMAT_OGG }, { transfer: [copy.buffer] });
+    const reply = await this.#channel.request({ op: 'encode', samples: copy, format: FORMAT_OGG, bitrate }, { transfer: [copy.buffer] });
     return reply.out;
   }
 
@@ -166,7 +182,7 @@ class SpeechAudio {
     const name = String(path);
     const kind = /\.(wav|ogg)$/i.exec(name)?.[1].toLowerCase();
     if (!kind) throw new Error(`${name}: save() writes .wav (WAV) or .ogg (Ogg Opus); name the file with one of those extensions`);
-    await this.#save(name, kind === 'wav' ? this.toWav() : await this.toOgg());
+    await this.#save(name, await this.encode(kind));
   }
 }
 
