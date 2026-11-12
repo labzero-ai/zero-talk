@@ -1,71 +1,25 @@
-# Releasing
+# Releasing Zero Talk
 
-The `release.yml` workflow publishes Python, npm and Rust packages from a version tag.
-Each publishing job waits for the builds and checks, then requires approval through
-the GitHub environment `release`. No registry token is stored in the repository or
-used on a local machine by this workflow.
+The release workflow builds and publishes Python, npm and Rust packages from the same version tag. The first tag is `v1.0.0`. PyPI can create a project on the first trusted publish. For that tag alone, npm and crates.io use short-lived environment secrets to publish the actual 1.0.0 packages. Each later tag uses trusted publishing on all three registries.
 
-## One-time owner setup
+## Configure the first release
 
-- Create the npm organisation `labzero-ai` and give the lab account permission to
-  publish `@labzero-ai/zero-talk` publicly.
-- Create the GitHub environment **release**, add required reviewers and restrict
-  deployments to release tags (`v*`). See [GitHub environment protection](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments).
-- Configure each registry's GitHub trusted publisher with owner **labzero-ai**,
-  repository **zero-talk**, workflow filename **release.yml** and environment **release**:
-  - **PyPI, `zero-talk`:** use a [pending publisher](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
-    for a new project. No manual first upload is needed. The workflow enables
-    [PyPI attestations](https://docs.pypi.org/attestations/producing-attestations/).
-  - **npm, `@labzero-ai/zero-talk`:** configure it in the existing package's
-    Settings → Trusted publishing, and allow direct **npm publish**. The
-    [npm guide](https://docs.npmjs.com/trusted-publishers/) requires npm 11.5.1+
-    and Node 22.14.0+ on a hosted runner; this workflow installs npm 11 on Node 24.
-    It also requires `repository.url` in `js/package.json` to identify
-    `https://github.com/labzero-ai/zero-talk`. Complete the first trusted publish
-    within two days of configuration, or recreate the expired publisher.
-  - **crates.io, both `zero-talk-model-11m` and `zero-talk`:** configure each crate
-    separately. [crates.io explicitly requires an existing published crate](https://crates.io/docs/trusted-publishing).
+1. In the public GitHub repository `labzero-ai/zero-talk`, create the environment `release`. Under **Selected branches and tags**, add the **tag** pattern `v*` and add the release owner as a required reviewer. With one reviewer who also pushes the tag, leave **Prevent self-review** off. [GitHub environment protection](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)
+2. On PyPI, add a pending GitHub publisher for project `zero-talk`, owner `labzero-ai`, repository `zero-talk`, workflow `release.yml`, environment `release`. [PyPI pending publishers](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
+3. On npm, create or confirm the organisation `labzero-ai` and the release account's right to publish to that scope. Create a short-lived granular token with package read/write access for `@labzero-ai`, permission to publish directly and bypass 2FA for the CI publish. Save it in the GitHub **environment** secret `NPM_BOOTSTRAP_TOKEN`. npm configures OIDC from an existing package's settings. [Scoped public packages](https://docs.npmjs.com/creating-and-publishing-scoped-public-packages/) · [Granular token settings](https://docs.npmjs.com/creating-and-viewing-access-tokens/)
+4. On crates.io, confirm the release account's verified email and create a short-lived token authorised to publish the two new crates `zero-talk-model-11m` and `zero-talk`. Save it as environment secret `CRATES_BOOTSTRAP_TOKEN`. First publications require a regular credential. [crates.io trusted publishing](https://crates.io/docs/trusted-publishing)
 
-**Initial npm and crates.io publication is a separate owner decision.** npm's
-documented setup starts in an existing package's settings and offers no pending
-publisher; a first non-OIDC publication is therefore needed before that setup.
-This is an inference from the [npm setup instructions](https://docs.npmjs.com/trusted-publishers/),
-also tracked in the [npm documentation issue](https://github.com/npm/documentation/issues/1926).
-crates.io explicitly requires an API token for the initial publication. Arrange
-these bootstrap releases separately using CI-only credentials, then revoke them;
-this workflow has no token fallback. Choose initial versions separately: a version
-already published during bootstrap cannot be published again by this workflow.
+## Cut the release
 
-The release builds only from this public repository. A build adds one new kind of data,
-the runner's folders: the
-workflow remaps them, and `.github/scripts/check-artifacts.py` fails the run if one
-reaches an archive or a binary.
+1. Match the version in `rust/Cargo.toml` (workspace), `python/pyproject.toml`, `python/Cargo.toml` and `js/package.json`. Update dependency versions and lockfiles. Review the READMEs and run `python3 .github/scripts/check-docs.py`.
+2. Push the reviewed commit and wait for CI to pass on that exact commit. The reference build of the **npm** WebAssembly engine uses the Rust version in `rust/crates/zero-talk-wasm/build.sh` on macOS Apple silicon. CI compares that build byte for byte with `js/dist/engine.wasm` and its own `model.json`. The website has a separately built engine and manifest.
+3. From the passing commit, create and push the matching tag. For 1.0.0, use `git tag v1.0.0` and `git push origin refs/tags/v1.0.0`. This starts the builds. Leave the environment jobs waiting for review.
+4. Download and inspect the artifacts from that run. Expect five abi3 wheels (Linux x86-64 and ARM64, Windows x86-64, macOS Apple silicon and Intel), one source distribution, one scoped npm tarball and two crate archives. Check the unpacked contents and run the README quickstarts from those archives. Approve the three `release` jobs for the reviewed tag and run.
+5. PyPI uploads the reviewed Python files with attestations. npm sends the reviewed tarball with provenance. For Rust, Cargo rebuilds each archive during publication. The release uses Cargo's publish-request checksum to require the reviewed bytes before each upload. The model crate goes first, followed by the engine. [Cargo credential protocol](https://doc.rust-lang.org/cargo/reference/credential-provider-protocol.html#publish-request)
+6. Check each registry's published version, filenames and digests against the reviewed files. Install 1.0.0 in fresh environments from the registries and speak a sentence in each runtime. For the model hub, run `sh huggingface/assemble.sh OUTPUT_DIRECTORY` into a new directory and review all seven files. Publish that directory under `labzero-ai/zero-talk-11m` and check the card, model and front-end hashes from the public page.
 
-## Release steps
+## After the first publication
 
-1. Set the same version in `rust/Cargo.toml` (`workspace.package`),
-   `python/pyproject.toml`, `python/Cargo.toml` and `js/package.json`. Update internal
-   crate dependency versions, lockfiles and version assertions where needed.
-   Ensure the two Rust crates permit publication and the npm repository metadata
-   matches the public repository.
-2. Review the changes and pass CI. It includes crate packaging, an npm pack dry
-   run and a rebuild of `js/dist/engine.wasm` from the sources with the pinned toolchain,
-   which must give the file and the size and sha256 in `model.json`. The same file
-   goes to `https://labzero.ai/zero-talk-11m/engine.wasm` (the website serves what
-   `model.json` lists). Commit the reviewed changes.
-3. Create `vVERSION` on that commit and push the tag.
-   For version 1.0.0, the tag is `v1.0.0`. Never move a released tag.
-4. Review the release build results and approve the three `release` environment
-   jobs. Verify the versions and files in all three registries afterward.
+Revoke the two bootstrap tokens and remove both environment secrets. Set up GitHub trusted publishing on each existing crate using owner `labzero-ai`, repository `zero-talk`, workflow `release.yml` and environment `release`. Configure the same fields with direct publish permission on the npm package close to the **next** release. npm requires first use of a new trusted publisher within two days of configuration. The PyPI pending publisher becomes permanent after its first use. [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/)
 
-Wheels are built and tested natively on Linux x86-64 and ARM64 (manylinux 2.28),
-Windows x86-64, macOS Apple silicon (`macos-26`) and macOS Intel (`macos-26-intel`).
-The macOS labels are [GitHub-hosted runner labels](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
-A source distribution
-is also built. PyPI attestations and npm provenance are enabled.
-
-For a manual run, select the existing version tag in **Actions → release → Run
-workflow**. A branch run fails the version gate. Registries publish independently;
-there is no rollback across them. After a partial release, inspect the registries
-and rerun only failed jobs; rerunning successful publishers tries to republish an
-immutable version.
+Registries publish independently. On partial failure, inspect the public files before retrying. Rerun the failed jobs on the same tag. The Rust job resumes after an already published crate only when its indexed checksum matches its reviewed archive. The PyPI job compares existing filenames and digests with the reviewed artifacts and uploads only the missing files. Keep an immutable tag with its original artifacts. A correction to published bytes needs a new version.

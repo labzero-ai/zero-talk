@@ -25,9 +25,8 @@ Every package loads the model by its ID, `labzero-ai/zero-talk-11m`. The model s
   for the files those systems install, not counting the PyTorch they need (our trial, 2026-11-06).
 - **Clear enough to read back.** 52 everyday sentences (numbers, dates, prices, abbreviations, questions), played to a
   speech recogniser: word error rate 6.5% with faster-whisper `base.en` (95% interval 4.1 to 9.3%) and 6.7% with `small.en`
-  (4.2 to 9.6%). In the same trial Pocket TTS 18.2M scored 9.4% and 6.8%, and Kokoro-82M 6.0% and 5.4%. The intervals
-  overlap, so this set cannot tell the three apart; it does not measure naturalness.
-- **Private.** No text or audio leaves the device. Python, Rust and Node.js make no network request. A browser fetches the
+  (4.2 to 9.6%). In the same trial Pocket TTS 18.2M scored 9.4% and 6.8%, and Kokoro-82M 6.0% and 5.4%. The 95% intervals overlap. These scores measure recogniser errors on this set.
+- **Private.** No text or audio leaves the device. Python, Rust and Node.js load the bundled model locally. A browser fetches the
   package's own files, nothing else (see [Privacy](#privacy)).
 - **Open.** Apache-2.0 for the engine and the model files.
 
@@ -43,7 +42,7 @@ an Apple M1 Pro (10 cores, 32 GB). "Real time" means seconds of speech made per 
 | Package | Speed | Peak memory | Voice load |
 | --- | --- | --- | --- |
 | Rust and Python on macOS (Apple's Accelerate library) | 10 times real time | about 230 MB | 0.1 s |
-| Rust, pure-Rust backend (Linux, Windows, Intel Macs; `--backend portable` on macOS) | 2.7 times real time | about 200 MB | 0.1 s |
+| Rust, pure-Rust backend (Linux, Windows; `--backend portable` on macOS) | 2.7 times real time | about 200 MB | 0.1 s |
 | Node.js (WebAssembly) | 1.5 times real time | about 215 MB | 0.2 s |
 
 Memory grows with the length of the text: 3,280 s of speech from 50,300 characters peaked at about 730 MB in Rust. In a
@@ -52,7 +51,7 @@ the text and the scripts to measure your own machine.
 
 ## Privacy
 
-No text you give it and no audio it makes leaves the device. Python, Rust and Node.js make no network request. In a browser the
+No text you give it and no audio it makes leaves the device. Python and Rust read the files locally. Node.js reads the bundled files locally unless you supply an HTTP address. In a browser the
 only requests are for the package's own files (engine, model and text front end, about 9 MB), made to whichever host serves
 them: your server, or a CDN such as jsDelivr if you import the package from there. That host sees an ordinary file request.
 

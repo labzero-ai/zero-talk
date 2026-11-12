@@ -69,6 +69,8 @@ async function readFiles(options) {
 // An address as a URL: a path (relative to the working folder), a file: URL or an http(s) URL.
 function fileUrl(value) {
   const text = String(value);
+  // A Windows drive letter is a path prefix, including in drive-relative paths.
+  if (process.platform === 'win32' && /^[a-z]:/i.test(text)) return pathToFileURL(resolve(text));
   return /^[a-z][a-z0-9+.-]*:/i.test(text) ? new URL(text) : pathToFileURL(resolve(text));
 }
 

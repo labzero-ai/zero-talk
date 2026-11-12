@@ -59,17 +59,14 @@ audio.sampleRate   // 24000
 audio.seconds
 await audio.encode('wav')                    // Uint8Array, a WAV file
 await audio.encode('ogg', { bitrate: 64 })   // Uint8Array, Ogg Opus at 64 kbit/s (8 to 128; 24 when omitted)
-await audio.play()   // browser only
 ```
 
 In a browser there is no file system: `save()` rejects there. Use `await audio.encode('ogg')` and offer the bytes
 as a download.
 
-Play while it is still being made, or take it piece by piece:
+In a browser, call `voice.play(text)` from a button click to hear speech as it is made. For access to the samples in either runtime:
 
 ```js
-await voice.play('This starts playing before the sentence is finished.');   // browser only
-
 const parts = [];
 for await (const chunk of voice.stream('A longer text, read piece by piece.')) {
   if (chunk.restart) parts.length = 0;   // the GPU engine failed: the text starts again on WebAssembly
@@ -156,9 +153,8 @@ Measured on 2026-11-06 with the three packages. Exact error texts are in each pa
   the files those systems install, not counting the PyTorch they need (trial of 2026-11-06).
 - **Clear enough to read back:** 52 everyday sentences (numbers, dates, prices, abbreviations, questions) played to a speech
   recogniser: word error rate 6.5% with faster-whisper `base.en` (95% interval 4.1 to 9.3%) and 6.7% with `small.en` (4.2 to
-  9.6%). In the same trial Pocket TTS 18.2M scored 9.4% and 6.8%, and Kokoro-82M 6.0% and 5.4%. The intervals overlap, so the
-  set cannot tell the three apart; it does not measure naturalness.
-- **Private:** no text or audio leaves the device. Python, Rust and Node.js make no network request; a browser fetches the
+  9.6%). In the same trial Pocket TTS 18.2M scored 9.4% and 6.8%, and Kokoro-82M 6.0% and 5.4%. The 95% intervals overlap. These scores measure recogniser errors on this set.
+- **Private:** no text or audio leaves the device. Python, Rust and Node.js load the bundled model locally. A browser fetches the
   package's own files (about 9 MB) from whichever host serves them.
 - **Given up:** one voice, English only, no tempo or pause control. Pocket TTS ran faster on the same CPU in our trial.
 
@@ -170,7 +166,7 @@ Measured with Zero Talk 1.0 on 2026-11-09 (UTC), reading a 503-character text (3
 | Package | Speed | Peak memory |
 | --- | --- | --- |
 | Rust and Python on macOS (Apple's Accelerate library) | 10 times real time | about 230 MB |
-| Rust, pure-Rust backend (Linux, Windows, Intel Macs) | 2.7 times real time | about 200 MB |
+| Rust, pure-Rust backend (Linux, Windows) | 2.7 times real time | about 200 MB |
 | Node.js (WebAssembly) | 1.5 times real time | about 215 MB |
 
 In a browser with WebGPU the speed depends on the GPU; the demo shows the figure for your device.

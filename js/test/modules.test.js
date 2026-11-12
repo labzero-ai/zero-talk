@@ -4,13 +4,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const dist = fileURLToPath(new URL('../dist/', import.meta.url));
 const modules = readdirSync(dist, { recursive: true }).filter((name) => /\.(js|cjs)$/.test(name));
 
 test('the package ships JavaScript files', () => {
-  assert.ok(modules.includes('zero-talk.js') && modules.includes('webgpu/generator.js'), modules.join(', '));
+  assert.ok(modules.includes('zero-talk.js') && modules.includes(join('webgpu', 'generator.js')), modules.join(', '));
 });
 
 for (const name of modules) {

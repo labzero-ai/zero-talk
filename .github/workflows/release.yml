@@ -1,7 +1,3 @@
-# Publishes npm, PyPI and crates.io from a pushed vVERSION tag, with trusted publishing (no registry token is stored).
-# Builds use only this public repository, so the one thing a build adds is the runner's folders: they are remapped,
-# and check-artifacts.py fails the run if any reaches a file. Each publish job waits for approval in the `release`
-# environment (RELEASING.md).
 name: release
 
 on:
@@ -174,15 +170,26 @@ jobs:
         working-directory: rust
         run: |
           cargo test --release --workspace
-          cargo package --workspace
+          cargo package --locked -p zero-talk-model-11m -p zero-talk
       - name: Test and pack npm
         working-directory: js
         run: |
           npm test
-          npm pack --pack-destination "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/npm"
+          npm pack --pack-destination "$RUNNER_TEMP/npm"
       - name: Check packages and the Rust executable
         run: |
-          python3 .github/scripts/check-artifacts.py rust/target/package/*.crate rust/target/release/zero-talk "$RUNNER_TEMP"/*.tgz
+          python3 .github/scripts/check-artifacts.py rust/target/package/*.crate rust/target/release/zero-talk "$RUNNER_TEMP/npm"/*.tgz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: npm-package
+          path: ${{ runner.temp }}/npm/*.tgz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rust-packages
+          path: rust/target/package/*.crate
+          if-no-files-found: error
 
   pypi:
     name: Publish to PyPI
@@ -197,7 +204,39 @@ jobs:
           pattern: python-*
           path: dist
           merge-multiple: true
+      - name: Resume a partial upload from the reviewed files
+        id: remaining
+        run: |
+          python3 - <<'PYTHON'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          from urllib.error import HTTPError
+          from urllib.request import urlopen
+
+          version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          files = {path.name: path for path in Path("dist").iterdir() if path.is_file()}
+          if not files:
+              raise SystemExit("No reviewed Python files found.")
+          try:
+              with urlopen(f"https://pypi.org/pypi/zero-talk/{version}/json", timeout=30) as response:
+                  uploaded = json.load(response)["urls"]
+          except HTTPError as error:
+              if error.code != 404:
+                  raise
+              uploaded = []
+          for entry in uploaded:
+              path = files.pop(entry["filename"], None)
+              if (path is None or entry["yanked"] or
+                      hashlib.sha256(path.read_bytes()).hexdigest() != entry["digests"]["sha256"]):
+                  raise SystemExit("An existing PyPI file differs from the reviewed release.")
+              path.unlink()
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print("upload=" + str(bool(files)).lower(), file=output)
+          PYTHON
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        if: steps.remaining.outputs.upload == 'true'
         with:
           attestations: true
 
@@ -219,15 +258,21 @@ jobs:
           package-manager-cache: false
       - name: Install npm with trusted publishing support
         run: npm install --global npm@11
-      - name: Test and check the exact npm archive
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: npm-package
+          path: ${{ runner.temp }}/npm
+      - name: Publish the reviewed tarball
         working-directory: js
+        env:
+          NODE_AUTH_TOKEN: ${{ github.ref_name == 'v1.0.0' && secrets.NPM_BOOTSTRAP_TOKEN || '' }}
         run: |
-          npm test
-          npm pack --pack-destination "$RUNNER_TEMP"
-          python3 ../.github/scripts/check-artifacts.py "$RUNNER_TEMP"/*.tgz
-      - name: Publish the checked archive with OIDC and provenance
-        working-directory: js
-        run: npm publish --provenance --access public "$RUNNER_TEMP"/*.tgz
+          if [[ "$GITHUB_REF_NAME" == v1.0.0 ]]; then
+            : "${NODE_AUTH_TOKEN:?Set NPM_BOOTSTRAP_TOKEN in the release environment}"
+            export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/first-publish.npmrc"
+            printf '%s\n' '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}' > "$NPM_CONFIG_USERCONFIG"
+          fi
+          npm publish --registry=https://registry.npmjs.org --provenance --access public "$RUNNER_TEMP/npm"/*.tgz
 
   crates:
     name: Publish to crates.io
@@ -241,16 +286,15 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - name: Remap Rust build paths
-        run: echo "RUSTFLAGS=--remap-path-prefix=$GITHUB_WORKSPACE=/src --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo" >> "$GITHUB_ENV"
-      - name: Package and check the crates before authentication
-        run: |
-          cargo package --workspace --manifest-path rust/Cargo.toml
-          python3 .github/scripts/check-artifacts.py rust/target/package/*.crate
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: rust-packages
+          path: ${{ runner.temp }}/crates
       - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        if: github.ref_name != 'v1.0.0'
         id: auth
-      - name: Publish the workspace with a temporary OIDC credential
-        working-directory: rust
+      - name: Publish the reviewed crates in dependency order
         env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: cargo publish --workspace
+          REVIEWED_CRATES: ${{ runner.temp }}/crates
+          PUBLISH_TOKEN: ${{ github.ref_name == 'v1.0.0' && secrets.CRATES_BOOTSTRAP_TOKEN || steps.auth.outputs.token }}
+        run: python3 .github/scripts/publish-crates.py

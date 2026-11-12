@@ -14,12 +14,12 @@ Model page and live demo: https://labzero.ai/zero-talk-11m/
 
 ## Command line
 
-`cargo install zero-talk` needs a Rust toolchain (https://rustup.rs) and compiles the engine locally, which takes a few minutes.
+`cargo install zero-talk` needs Rust 1.88 or later (https://rustup.rs) and compiles the engine locally, which takes a few minutes.
 
 ```sh
 cargo install zero-talk
 
-zero-talk "Hello there." -o hello.ogg     # Ogg Opus at 24 kbit/s, 24 kHz mono: 1.8 s of speech in 5 KB; a .wav name writes WAV
+zero-talk "Hello there." -o hello.ogg     # Ogg Opus at 24 kbit/s, 24 kHz mono; a .wav name writes WAV
 zero-talk "Hello there."                  # plays it while it renders, through a player on your system (see below)
 zero-talk --stream "Hello there." > out.ogg
 ```
@@ -128,8 +128,8 @@ characters took 335 s and peaked at about 730 MB. Other CPUs differ; `zero-talk`
 ## Why this one
 
 About 9 MB with the engine, against 68 to 341 MB for the files Pocket TTS and Kokoro-82M install (not counting PyTorch).
-On 52 everyday sentences read back by a speech recogniser, the word error rate was 6.5% to 6.7% (95% intervals 4.1 to 9.6%),
-level with Pocket TTS 18.2M and Kokoro-82M, whose intervals overlap (trial of 2026-11-06). It has one voice and reads
+In a trial of 52 everyday sentences on 2026-11-06, Zero Talk had a word error rate of 6.5% with one recogniser and 6.7% with another.
+The 95% intervals overlapped those for Pocket TTS 18.2M and Kokoro-82M. It has one voice and reads
 English only. More detail is in the [repository README](https://github.com/labzero-ai/zero-talk#why-this-one).
 
 ## What it does and does not do

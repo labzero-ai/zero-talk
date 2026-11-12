@@ -39,6 +39,6 @@
   "files": ["dist/", "index.d.ts", "LICENSE", "README.md"],
   "sideEffects": false,
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test"
   }
 }

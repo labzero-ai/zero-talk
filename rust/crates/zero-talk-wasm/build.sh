@@ -1,6 +1,6 @@
 #!/bin/sh
-# Builds js/dist/engine.wasm from this crate and the engine (../zero-talk), with a pinned toolchain and path remaps, so that the
-# same sources give the same bytes on any machine.
+# Builds js/dist/engine.wasm from this crate and the engine (../zero-talk), with a pinned toolchain and path remaps. The reference
+# build uses macOS on Apple silicon. Other compiler hosts can order functions differently.
 #
 #   build.sh            builds, copies the file to js/dist/engine.wasm and writes its size and sha256 into js/dist/model.json
 #                       (needs Node.js, which the npm package needs anyway)

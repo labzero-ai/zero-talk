@@ -122,11 +122,11 @@ end (`frontend.bin`). Nothing is fetched from anywhere else, and nothing is down
   A file named in `files` wins over `modelDir`, and `modelDir` over the package's own files. A server on another origin must send
   an `Access-Control-Allow-Origin` header; if it does not, the error says so and names the address.
 
-Every file's size and SHA-256 are in the package's `model.json`, the same as on the model page.
+`dist/model.json` lists the sizes and SHA-256 hashes of the three files in this package. The website builds its WebAssembly engine separately.
 
 ## Privacy
 
-No text you give it and no audio it makes leaves the device. Node.js makes no network request. A browser requests only the
+No text you give it and no audio it makes leaves the device. Node.js reads the bundled files locally unless you supply an HTTP address. A browser requests only the
 package's own files (about 9 MB), from whichever host serves them: your server, or jsDelivr if you use the link above.
 
 ## Speed and memory
@@ -141,8 +141,8 @@ depends on the GPU, and the GPU buffers take about 34 to 37 MB; the demo on the 
 ## Why this one
 
 About 9 MB with the engine, against 68 to 341 MB for the files Pocket TTS and Kokoro-82M install (not counting PyTorch).
-On 52 everyday sentences read back by a speech recogniser, the word error rate was 6.5% to 6.7% (95% intervals 4.1 to 9.6%),
-level with Pocket TTS 18.2M and Kokoro-82M, whose intervals overlap (trial of 2026-11-06). It has one voice and reads
+In a trial of 52 everyday sentences on 2026-11-06, Zero Talk had a word error rate of 6.5% with one recogniser and 6.7% with another.
+The 95% intervals overlapped those for Pocket TTS 18.2M and Kokoro-82M. It has one voice and reads
 English only. More detail is in the [repository README](https://github.com/labzero-ai/zero-talk#why-this-one).
 
 ## What it does and does not do

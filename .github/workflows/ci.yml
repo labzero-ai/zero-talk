@@ -32,7 +32,7 @@ jobs:
       - run: cargo test --release --workspace
       - name: Check crate packaging
         if: matrix.os == 'ubuntu-24.04'
-        run: cargo package --workspace
+        run: cargo package --locked -p zero-talk-model-11m -p zero-talk
       - name: Speak three texts (sha256 of the WAV; macOS 15 on Apple silicon gives 5289bd29…, 9d258fd6…, b71eb1fe…)
         run: |
           i=0
@@ -45,8 +45,8 @@ jobs:
           done
 
   wasm:
-    name: engine.wasm is what the sources build
-    runs-on: ubuntu-24.04
+    name: engine.wasm matches the reference build
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0

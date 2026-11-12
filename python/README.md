@@ -35,7 +35,9 @@ audio.sample_rate    # 24000
 audio.seconds
 audio.encode("wav")  # bytes, a WAV file
 audio.encode("ogg", bitrate=64)   # bytes, Ogg Opus at 64 kbit/s (8 to 128; 24 when omitted)
-numpy.asarray(audio.samples)   # needs numpy (pip install numpy); no copy
+# Optional, after pip install numpy:
+# import numpy
+# numpy.asarray(audio.samples)   # no copy
 ```
 
 Piece by piece, while it is still being made:
@@ -106,15 +108,15 @@ No text you give it and no audio it makes leaves the device. The package makes n
 Measured with Zero Talk 1.0 on 2026-11-09 (UTC), reading the 503-character text in
 [`bench/text.txt`](https://github.com/labzero-ai/zero-talk/blob/main/bench/text.txt) (32.8 s of speech) with Python 3.12 on an
 Apple M1 Pro (10 cores, 32 GB, macOS wheel): 10 times real time (seconds of speech made per second of compute), peak memory
-about 230 MB, voice load 0.1 s. The pure Rust backend used on Linux, Windows and Intel Macs ran 2.7 times real time on the same
+about 230 MB, voice load 0.1 s. The pure Rust backend used on Linux and Windows ran 2.7 times real time on the same
 machine; other CPUs differ. Memory grows with the text: 3,280 s of speech from 50,300 characters took 321 s (10 times real time) and peaked at about 910 MB. `bench/python.py` in the repository
 measures your own machine.
 
 ## Why this one
 
 About 9 MB with the engine, against 68 to 341 MB for the files Pocket TTS and Kokoro-82M install (not counting PyTorch).
-On 52 everyday sentences read back by a speech recogniser, the word error rate was 6.5% to 6.7% (95% intervals 4.1 to 9.6%),
-level with Pocket TTS 18.2M and Kokoro-82M, whose intervals overlap (trial of 2026-11-06). It has one voice and reads
+In a trial of 52 everyday sentences on 2026-11-06, Zero Talk had a word error rate of 6.5% with one recogniser and 6.7% with another.
+The 95% intervals overlapped those for Pocket TTS 18.2M and Kokoro-82M. It has one voice and reads
 English only. More detail is in the [repository README](https://github.com/labzero-ai/zero-talk#why-this-one).
 
 ## What it does and does not do
